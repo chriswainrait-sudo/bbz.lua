@@ -1,4 +1,4 @@
-local SHOW_CROWN_ON_PC = true
+local SHOW_CROWN_ON_PC = false
 
 return {Exports={"userInputService","TweenService","Players","RunService","ReplicatedStorage","Workspace","StarterGui","GuiService","LocalPlayer","PlayerGui","GetGuiParent","GuiParent","IsMobileDevice","IS_MOBILE","SHOW_RESTORE_BUTTON","NexusUI","ScriptUnloaded","ScriptConnections","UnloadCallbacks","GuiConnections","TrackGuiConnection","TrackScriptConnection","RegisterUnloadCallback","PRIME_TIER","IS_PREMIUM_USER","NO_COOLDOWN_FREEMIUM_ACCESS_DURATION","NO_COOLDOWN_FREEMIUM_LOCK_DURATION","NO_COOLDOWN_FREEMIUM_CYCLE_DURATION","NoCooldownFreemiumCycleStart","Clamp","MAIN_WINDOW_TRANSPARENCY","GUI_BUTTON_TRANSPARENCY","GUI_PANEL_TRANSPARENCY","GUI_OVERLAY_TRANSPARENCY","GUI_DISABLED_TRANSPARENCY","ACCENT","COLOR_WINDOW","COLOR_TOPBAR","COLOR_GROUP","COLOR_CONTROL","COLOR_BORDER","COLOR_TEXT","COLOR_TEXT_DIM","COLOR_ON_ACCENT","ApplyButtonStyle","CreateClickButton","ConnectClick","windowSize","Window","Tabs","currentCloseKey","waitingForKey","SettingsSection","keybindRow","keybindRowCorner","keybindTitle","keybindHint","keybindBadge","keybindBadgeCorner","keybindBadgeStroke","keybindBadgeLabel","UpdateKeybindBadge","SetGUIKey","BeginKeyBinding"},Init=function()
 
@@ -382,11 +382,72 @@ function NexusUI:CreateWindow(options)
     local mainStroke = Instance.new("UIStroke")
     mainStroke.Name = "NexusMainStroke"
     mainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    NexusUI:BindColor(mainStroke, "Color", function() return COLOR_BORDER end)
+    mainStroke.Color = Color3.new(1, 1, 1)
     mainStroke.Transparency = 0.15
     mainStroke.Thickness = 1
     mainStroke.LineJoinMode = Enum.LineJoinMode.Round
     mainStroke.Parent = mainFrame
+
+    -- Smooth animated border. One UIGradient + one Tween keeps this very cheap.
+    local mainStrokeGradient = Instance.new("UIGradient")
+    mainStrokeGradient.Name = "NexusMainStrokeGradient"
+    mainStrokeGradient.Rotation = 0
+    mainStrokeGradient.Parent = mainStroke
+
+    local function updateMainStrokeGradient()
+        if not mainStrokeGradient.Parent then return end
+
+        local h, s, v = ACCENT:ToHSV()
+        local saturation = math.clamp(s * 0.92 + 0.08, 0, 1)
+        local value = math.clamp(v * 1.06, 0, 1)
+
+        local function hue(offset)
+            return Color3.fromHSV((h + offset) % 1, saturation, value)
+        end
+
+        -- First and last colors are identical, so a 360° rotation loops seamlessly.
+        local c0 = hue(0.00)
+        local c1 = hue(0.08)
+        local c2 = hue(0.16)
+        local c3 = hue(0.24)
+
+        mainStrokeGradient.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0.00, c0),
+            ColorSequenceKeypoint.new(0.25, c1),
+            ColorSequenceKeypoint.new(0.50, c2),
+            ColorSequenceKeypoint.new(0.75, c3),
+            ColorSequenceKeypoint.new(1.00, c0),
+        })
+    end
+
+    updateMainStrokeGradient()
+    table.insert(NexusUI.ThemeRefresh, updateMainStrokeGradient)
+
+    local mainStrokeTween = TweenService:Create(
+        mainStrokeGradient,
+        TweenInfo.new(4.5, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1),
+        {Rotation = 360}
+    )
+
+    local function updateMainStrokeAnimation()
+        if ScriptUnloaded or not mainStrokeGradient.Parent then
+            mainStrokeTween:Cancel()
+            return
+        end
+
+        if mainFrame.Visible and screenGui.Enabled then
+            mainStrokeTween:Play()
+        else
+            mainStrokeTween:Pause()
+        end
+    end
+
+    TrackGuiConnection(mainFrame:GetPropertyChangedSignal("Visible"):Connect(updateMainStrokeAnimation))
+    TrackGuiConnection(screenGui:GetPropertyChangedSignal("Enabled"):Connect(updateMainStrokeAnimation))
+    RegisterUnloadCallback(function()
+        mainStrokeTween:Cancel()
+    end)
+    updateMainStrokeAnimation()
 
     local innerClip = Instance.new("Frame")
     innerClip.Name = "InnerClip"
