@@ -543,7 +543,7 @@ function NexusUI:CreateWindow(options)
     local isPremiumUser = IS_PREMIUM_USER
 
     logoSubtitle.Text = isPremiumUser and "Premium" or "Freemium"
-    NexusUI:BindColor(logoSubtitle, "TextColor3", function() return isPremiumUser and ACCENT or COLOR_TEXT_DIM end)
+    NexusUI:BindColor(logoSubtitle, "TextColor3", function() return COLOR_TEXT end)
     logoSubtitle.TextXAlignment = Enum.TextXAlignment.Left
     logoSubtitle.TextYAlignment = Enum.TextYAlignment.Center
 
@@ -551,6 +551,17 @@ function NexusUI:CreateWindow(options)
     logoSubtitle.TextSize = 15
     logoSubtitle.ZIndex = 3
     logoSubtitle.Parent = logoContainer
+    local sh = Instance.new("UIGradient")
+    sh.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,Color3.fromRGB(142,142,150)),
+        ColorSequenceKeypoint.new(0.35,Color3.fromRGB(210,210,218)),
+        ColorSequenceKeypoint.new(0.5,Color3.new(1,1,1)),
+        ColorSequenceKeypoint.new(0.65,Color3.fromRGB(210,210,218)),
+        ColorSequenceKeypoint.new(1,Color3.fromRGB(142,142,150))
+    })
+    sh.Offset = Vector2.new(-1,0)
+    sh.Parent = logoSubtitle
+    TweenService:Create(sh,TweenInfo.new(2.6,Enum.EasingStyle.Linear,Enum.EasingDirection.InOut,-1),{Offset=Vector2.new(1,0)}):Play()
 
     local tabStrip = Instance.new("ScrollingFrame")
     tabStrip.Name = "TabStrip"
