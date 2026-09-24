@@ -1,4 +1,4 @@
-local SHOW_CROWN_ON_PC = false
+local SHOW_LOGO_ON_PC = false
 
 return {Exports={"userInputService","TweenService","Players","RunService","ReplicatedStorage","Workspace","StarterGui","GuiService","LocalPlayer","PlayerGui","GetGuiParent","GuiParent","IsMobileDevice","IS_MOBILE","SHOW_RESTORE_BUTTON","NexusUI","ScriptUnloaded","ScriptConnections","UnloadCallbacks","GuiConnections","TrackGuiConnection","TrackScriptConnection","RegisterUnloadCallback","PRIME_TIER","IS_PREMIUM_USER","NO_COOLDOWN_FREEMIUM_ACCESS_DURATION","NO_COOLDOWN_FREEMIUM_LOCK_DURATION","NO_COOLDOWN_FREEMIUM_CYCLE_DURATION","NoCooldownFreemiumCycleStart","Clamp","MAIN_WINDOW_TRANSPARENCY","GUI_BUTTON_TRANSPARENCY","GUI_PANEL_TRANSPARENCY","GUI_OVERLAY_TRANSPARENCY","GUI_DISABLED_TRANSPARENCY","ACCENT","COLOR_WINDOW","COLOR_TOPBAR","COLOR_GROUP","COLOR_CONTROL","COLOR_BORDER","COLOR_TEXT","COLOR_TEXT_DIM","COLOR_ON_ACCENT","ApplyButtonStyle","CreateClickButton","ConnectClick","windowSize","Window","Tabs","currentCloseKey","waitingForKey","SettingsSection","keybindRow","keybindRowCorner","keybindTitle","keybindHint","keybindBadge","keybindBadgeCorner","keybindBadgeStroke","keybindBadgeLabel","UpdateKeybindBadge","SetGUIKey","BeginKeyBinding"},Init=function()
 
@@ -45,7 +45,7 @@ function IsMobileDevice()
 end
 
 IS_MOBILE = IsMobileDevice()
-SHOW_RESTORE_BUTTON = IS_MOBILE or SHOW_CROWN_ON_PC
+SHOW_RESTORE_BUTTON = IS_MOBILE or SHOW_LOGO_ON_PC
 
 NexusUI = {
     Options = {},
@@ -194,40 +194,70 @@ function NexusUI:SetTheme(name)
     return true
 end
 
-local crownPoints = {{5,12},{15,20},{24,6},{33,20},{43,12},{38,34},{10,34}}
-local function makeCrown(p,s,o)
-    local c = Instance.new("Frame")
-    c.Size = UDim2.fromOffset(s,s)
-    c.BackgroundTransparency = 1
-    c.BorderSizePixel = 0
-    c.Parent = p
-    local function part(x,y,w,h,col,z)
-        local f = Instance.new("Frame")
-        f.Position = UDim2.fromScale(x/48,y/48)
-        f.Size = UDim2.fromScale(w/48,h/48)
-        f.BackgroundColor3 = col
-        f.BorderSizePixel = 0
-        f.ZIndex = z
-        f.Parent = c
+local function makeLogo(parent, size)
+    local function New(class, props)
+        local object = Instance.new(class)
+        for key, value in pairs(props) do object[key] = value end
+        return object
     end
-    local function fill(col,k,z)
-        local pts = {}
-        for i,a in ipairs(crownPoints) do pts[i] = {24+(a[1]-24)*k,24+(a[2]-24)*k} end
-        for y = 4,42 do
-            local xs = {}
-            local sy = y+0.5
-            for i,a in ipairs(pts) do
-                local b = pts[i%#pts+1]
-                if (a[2]<=sy and b[2]>sy) or (b[2]<=sy and a[2]>sy) then xs[#xs+1] = a[1]+(sy-a[2])*(b[1]-a[1])/(b[2]-a[2]) end
-            end
-            table.sort(xs)
-            for i = 1,#xs-1,2 do part(xs[i],y,xs[i+1]-xs[i],1,col,z) end
-        end
-        part(24+(10-24)*k,39+(37-39)*k,28*k,4*k,col,z)
-    end
-    if o then fill(Color3.new(0,0,0),1,1) end
-    fill(Color3.new(1,1,1),o and 0.91 or 1,2)
-    return c
+    local PrimeLabel = New("Frame", {
+        Name = "PrimeLogo",
+        Size = UDim2.fromOffset(size, size),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Parent = parent,
+    })
+		local function Polygon(points, top, bottom, layer)
+			for row = 0, 95 do
+				local y = (row + 0.5) / 96
+				local hits = {}
+				for i, point in ipairs(points) do
+					local nextPoint = points[i % #points + 1]
+					if (point[2] <= y and nextPoint[2] > y) or (nextPoint[2] <= y and point[2] > y) then
+						hits[#hits + 1] = point[1] + (y - point[2]) * (nextPoint[1] - point[1]) / (nextPoint[2] - point[2])
+					end
+				end
+				table.sort(hits)
+				for i = 1, #hits - 1, 2 do
+					New("Frame", {
+						Name = "Facet",
+						Position = UDim2.fromScale(hits[i], row / 96),
+						Size = UDim2.fromScale(hits[i + 1] - hits[i], 1 / 96),
+						BorderSizePixel = 0,
+						BackgroundColor3 = top:Lerp(bottom, y),
+						Parent = PrimeLabel,
+						ZIndex = layer,
+					})
+				end
+			end
+		end
+		local white = Color3.fromRGB(255, 255, 255)
+		local silver = Color3.fromRGB(180, 180, 180)
+		local dark = Color3.fromRGB(70, 70, 70)
+		for i = 0, 79 do
+			local angle = math.rad(i * 4.5 - 90)
+			local nextAngle = angle + math.rad(4.8)
+			local x, y = 0.5 + math.cos(angle) * 0.455, 0.5 + math.sin(angle) * 0.455
+			local nx, ny = 0.5 + math.cos(nextAngle) * 0.455, 0.5 + math.sin(nextAngle) * 0.455
+			New("Frame", {
+				Name = "Ring",
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale((x + nx) / 2, (y + ny) / 2),
+				Size = UDim2.fromScale(math.sqrt((nx - x)^2 + (ny - y)^2) + 0.006, 0.025),
+				Rotation = math.deg(angle) + 92.4,
+				BackgroundColor3 = white:Lerp(silver, (y + 1) / 2),
+				BorderSizePixel = 0,
+				Parent = PrimeLabel,
+			})
+		end
+		Polygon({{0.21,0.25},{0.34,0.23},{0.44,0.18},{0.51,0.12},{0.46,0.23},{0.445,0.34},{0.445,0.56},{0.36,0.66},{0.36,0.34},{0.34,0.29}}, white, silver, 2)
+		Polygon({{0.21,0.25},{0.31,0.29},{0.34,0.34},{0.34,0.65},{0.30,0.73},{0.24,0.80},{0.29,0.68},{0.29,0.35},{0.27,0.29}}, silver, white, 3)
+		Polygon({{0.36,0.28},{0.46,0.23},{0.445,0.34},{0.445,0.56},{0.38,0.63},{0.38,0.31}}, dark, white, 4)
+		Polygon({{0.24,0.80},{0.45,0.59},{0.68,0.46},{0.54,0.63},{0.40,0.69}}, white, silver, 3)
+		Polygon({{0.24,0.80},{0.40,0.71},{0.52,0.69},{0.70,0.69},{0.84,0.60},{0.72,0.78},{0.69,0.88},{0.64,0.81},{0.47,0.77},{0.35,0.77}}, white, silver, 4)
+		Polygon({{0.24,0.80},{0.35,0.77},{0.47,0.77},{0.64,0.81},{0.69,0.88},{0.67,0.77},{0.51,0.73},{0.38,0.74}}, dark, white, 5)
+
+    return PrimeLabel
 end
 RegisterUnloadCallback(function()
     table.clear(bindings)
@@ -528,7 +558,7 @@ function NexusUI:CreateWindow(options)
     logoLayout.VerticalAlignment = Enum.VerticalAlignment.Center
     logoLayout.Parent = logoContainer
 
-    local cr = makeCrown(logoContainer,26,false)
+    local cr = makeLogo(logoContainer,26)
     cr.Name = "PrimeLogo"
     cr.LayoutOrder = 1
     cr.ZIndex = 3
@@ -657,8 +687,8 @@ function NexusUI:CreateWindow(options)
         restoreFrame.Parent = restoreGui
         restoreFrame.Active = true
 
-        local restoreButton = makeCrown(restoreFrame,48,true)
-        restoreButton.Name = "Crown"
+        local restoreButton = makeLogo(restoreFrame,48)
+        restoreButton.Name = "RestoreLogo"
         restoreButton.Active = true
         local restoreDragging = false
         local restoreDragMoved = false
