@@ -1688,7 +1688,20 @@ function NexusUI:CreateWindow(options)
                 return math.floor(v + 0.5)
             end
 
-            local function refresh()
+            -- Persistent slider object so configs can read and restore its value.
+            local sliderOption = {Value = value, IsSlider = true}
+
+            local refresh
+
+            function sliderOption:SetValue(newValue)
+                newValue = tonumber(newValue)
+                if not newValue then return false end
+                value = newValue
+                refresh()
+                return true
+            end
+
+            function refresh()
                 local clampedValue = Clamp(value, minValue, maxValue)
                 value = clampedValue
                 local range = maxValue - minValue
@@ -1697,7 +1710,8 @@ function NexusUI:CreateWindow(options)
                 fill.Size = UDim2.new(ratio, 0, 1, 0)
                 knob.Position = UDim2.new(ratio, 0, 0.5, 0)
                 valueLabel.Text = tostring(roundValue(value))
-                NexusUI.Options[id] = {Value = value}
+                sliderOption.Value = value
+                NexusUI.Options[id] = sliderOption
                 NexusUI.Options[id .. "Value"] = value
                 if data and data.Callback then
                     data.Callback(value)
@@ -1878,6 +1892,7 @@ function NexusUI:CreateWindow(options)
                 Value = nil,
                 Values = {},
                 Opened = false,
+                IsDropdown = true,
             }
 
             local function connectActivated(guiObject, callback)
@@ -2525,5 +2540,332 @@ TrackGuiConnection(keybindBadge.MouseLeave:Connect(function()
     end
 end))
 end -- desktop-only Settings UI
+
+-- Configs: save / load / overwrite / rename / delete every toggle, slider and dropdown.
+do
+    local HttpService = game:GetService("HttpService")
+    local CONFIG_ROOT = "PRIME"
+    local CONFIG_FOLDER = CONFIG_ROOT .. "/Configs"
+    local CONFIG_LIST_ID = "PRIME_ConfigList"
+    local CONFIG_EXCLUDED = {
+        [CONFIG_LIST_ID] = true,
+        EmoteAnimation = true, -- plays an emote on select, not a setting
+    }
+
+    local function configNotify(content)
+        NexusUI:Notify({Title = "Configs", Content = content, Duration = 3})
+    end
+
+    local function fileApiAvailable()
+        return type(writefile) == "function" and type(readfile) == "function"
+            and type(isfile) == "function" and type(listfiles) == "function"
+            and type(makefolder) == "function" and type(isfolder) == "function"
+    end
+
+    local function ensureConfigFolder()
+        if not fileApiAvailable() then return false end
+        local ok = pcall(function()
+            if not isfolder(CONFIG_ROOT) then makefolder(CONFIG_ROOT) end
+            if not isfolder(CONFIG_FOLDER) then makefolder(CONFIG_FOLDER) end
+        end)
+        return ok
+    end
+
+    local function sanitizeConfigName(name)
+        name = tostring(name or ""):gsub("[^%w%s%-_]", ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if #name > 32 then name = name:sub(1, 32) end
+        return name
+    end
+
+    local function configPath(name)
+        return CONFIG_FOLDER .. "/" .. name .. ".json"
+    end
+
+    local function configExists(name)
+        local ok, result = pcall(isfile, configPath(name))
+        return ok and result == true
+    end
+
+    local function listConfigs()
+        local names = {}
+        if not ensureConfigFolder() then return names end
+        local ok, files = pcall(listfiles, CONFIG_FOLDER)
+        if not ok or type(files) ~= "table" then return names end
+        for _, path in ipairs(files) do
+            local name = tostring(path):match("([^/\\]+)%.json$")
+            if name then table.insert(names, name) end
+        end
+        table.sort(names, function(a, b) return a:lower() < b:lower() end)
+        return names
+    end
+
+    local function collectConfig()
+        local data = {Version = 1, Toggles = {}, Sliders = {}, Dropdowns = {}}
+        for id, option in pairs(NexusUI.Options) do
+            if type(option) == "table" and not CONFIG_EXCLUDED[id] then
+                if option.IsToggle then
+                    data.Toggles[id] = option.Value == true
+                elseif option.IsSlider then
+                    data.Sliders[id] = tonumber(option.Value)
+                elseif option.IsDropdown and option.Value ~= nil then
+                    data.Dropdowns[id] = tostring(option.Value)
+                end
+            end
+        end
+        if currentCloseKey then
+            data.Keybind = currentCloseKey.Name
+        end
+        return data
+    end
+
+    local function writeConfig(name)
+        if not ensureConfigFolder() then
+            configNotify("Your executor does not support file saving")
+            return false
+        end
+        local ok, err = pcall(function()
+            writefile(configPath(name), HttpService:JSONEncode(collectConfig()))
+        end)
+        if not ok then
+            configNotify("Failed to save: " .. tostring(err))
+        end
+        return ok
+    end
+
+    local function applyConfig(data)
+        local applied = 0
+
+        for id, value in pairs(type(data.Sliders) == "table" and data.Sliders or {}) do
+            local option = NexusUI.Options[id]
+            if type(option) == "table" and option.IsSlider and option.Value ~= value then
+                if pcall(function() option:SetValue(value) end) then applied += 1 end
+            end
+        end
+
+        for id, value in pairs(type(data.Dropdowns) == "table" and data.Dropdowns or {}) do
+            local option = NexusUI.Options[id]
+            if type(option) == "table" and option.IsDropdown and not CONFIG_EXCLUDED[id]
+                and tostring(option.Value) ~= value then
+                for _, available in ipairs(option.Values) do
+                    if tostring(available) == value then
+                        if pcall(function() option:SetValue(available) end) then applied += 1 end
+                        break
+                    end
+                end
+            end
+        end
+
+        -- Toggles last so features start with the restored slider/dropdown values.
+        for id, value in pairs(type(data.Toggles) == "table" and data.Toggles or {}) do
+            local option = NexusUI.Toggles[id]
+            if type(option) == "table" and option.Value ~= (value == true) then
+                if pcall(function() option:SetValue(value == true) end) then applied += 1 end
+            end
+        end
+
+        if type(data.Keybind) == "string" and not IS_MOBILE and type(SetGUIKey) == "function" then
+            local ok, key = pcall(function() return Enum.KeyCode[data.Keybind] end)
+            if ok and key then pcall(SetGUIKey, key) end
+        end
+
+        return applied
+    end
+
+    local function readConfig(name)
+        if not fileApiAvailable() then
+            configNotify("Your executor does not support file loading")
+            return nil
+        end
+        if not configExists(name) then
+            configNotify("Config \"" .. name .. "\" not found")
+            return nil
+        end
+        local ok, data = pcall(function()
+            return HttpService:JSONDecode(readfile(configPath(name)))
+        end)
+        if not ok or type(data) ~= "table" then
+            configNotify("Config \"" .. name .. "\" is corrupted")
+            return nil
+        end
+        return data
+    end
+
+    local ConfigSection = Tabs.Settings:AddSection("Configs")
+
+    -- Config name input
+    local nameRow = Instance.new("Frame")
+    nameRow.Size = UDim2.new(1, 0, 0, 34)
+    NexusUI:BindColor(nameRow, "BackgroundColor3", function() return COLOR_CONTROL end)
+    nameRow.BackgroundTransparency = GUI_BUTTON_TRANSPARENCY
+    nameRow.BorderSizePixel = 0
+    nameRow.LayoutOrder = 0
+    nameRow.Parent = ConfigSection.Content
+
+    local nameRowCorner = Instance.new("UICorner")
+    nameRowCorner.CornerRadius = UDim.new(0, 4)
+    nameRowCorner.Parent = nameRow
+
+    local nameRowStroke = Instance.new("UIStroke")
+    nameRowStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    NexusUI:BindColor(nameRowStroke, "Color", function() return COLOR_BORDER end)
+    nameRowStroke.Transparency = 0.4
+    nameRowStroke.Thickness = 1
+    nameRowStroke.Parent = nameRow
+
+    local nameBox = Instance.new("TextBox")
+    nameBox.Size = UDim2.new(1, -20, 1, 0)
+    nameBox.Position = UDim2.new(0, 10, 0, 0)
+    nameBox.BackgroundTransparency = 1
+    nameBox.ClearTextOnFocus = false
+    nameBox.Text = ""
+    nameBox.PlaceholderText = "Config name..."
+    NexusUI:BindColor(nameBox, "TextColor3", function() return COLOR_TEXT end)
+    NexusUI:BindColor(nameBox, "PlaceholderColor3", function() return COLOR_TEXT_DIM end)
+    nameBox.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
+    nameBox.TextSize = 13
+    nameBox.TextXAlignment = Enum.TextXAlignment.Left
+    nameBox.TextTruncate = Enum.TextTruncate.AtEnd
+    nameBox.ZIndex = 5
+    nameBox.Parent = nameRow
+
+    TrackGuiConnection(nameBox.Focused:Connect(function()
+        nameRowStroke.Transparency = 0.1
+        NexusUI:BindColor(nameRowStroke, "Color", function() return ACCENT end)
+    end))
+    TrackGuiConnection(nameBox.FocusLost:Connect(function()
+        nameRowStroke.Transparency = 0.4
+        NexusUI:BindColor(nameRowStroke, "Color", function() return COLOR_BORDER end)
+    end))
+
+    local configDropdown = Tabs.Settings:AddDropdown(CONFIG_LIST_ID, {
+        Title = "Config List",
+        Values = listConfigs(),
+    })
+
+    local function refreshConfigList(selectName)
+        configDropdown:SetValues(listConfigs())
+        if selectName then
+            configDropdown:SetValue(selectName)
+        end
+    end
+
+    local function getSelectedConfig()
+        local selected = configDropdown:GetValue()
+        if not selected then
+            configNotify("Select a config first")
+        end
+        return selected
+    end
+
+    Tabs.Settings:AddButton({
+        Title = "Create Config",
+        Description = "Save current settings as a new config",
+        Callback = function()
+            local name = sanitizeConfigName(nameBox.Text)
+            if name == "" then
+                configNotify("Enter a config name")
+                return
+            end
+            if configExists(name) then
+                configNotify("\"" .. name .. "\" already exists. Use Overwrite")
+                return
+            end
+            if writeConfig(name) then
+                nameBox.Text = ""
+                refreshConfigList(name)
+                configNotify("Created \"" .. name .. "\"")
+            end
+        end,
+    })
+
+    Tabs.Settings:AddButton({
+        Title = "Load Config",
+        Description = "Apply the selected config",
+        Callback = function()
+            local name = getSelectedConfig()
+            if not name then return end
+            local data = readConfig(name)
+            if not data then return end
+            applyConfig(data)
+            configNotify("Loaded \"" .. name .. "\"")
+        end,
+    })
+
+    Tabs.Settings:AddButton({
+        Title = "Overwrite Config",
+        Description = "Save current settings into the selected config",
+        Callback = function()
+            local name = getSelectedConfig()
+            if not name then return end
+            if writeConfig(name) then
+                configNotify("Overwrote \"" .. name .. "\"")
+            end
+        end,
+    })
+
+    Tabs.Settings:AddButton({
+        Title = "Rename Config",
+        Description = "Rename the selected config to the name above",
+        Callback = function()
+            local oldName = getSelectedConfig()
+            if not oldName then return end
+            local newName = sanitizeConfigName(nameBox.Text)
+            if newName == "" then
+                configNotify("Enter a new name above")
+                return
+            end
+            if newName == oldName then return end
+            if configExists(newName) then
+                configNotify("\"" .. newName .. "\" already exists")
+                return
+            end
+            local ok, err = pcall(function()
+                writefile(configPath(newName), readfile(configPath(oldName)))
+                delfile(configPath(oldName))
+            end)
+            if not ok then
+                configNotify("Failed to rename: " .. tostring(err))
+                return
+            end
+            nameBox.Text = ""
+            refreshConfigList(newName)
+            configNotify("Renamed to \"" .. newName .. "\"")
+        end,
+    })
+
+    local pendingDelete, pendingDeleteTime = nil, 0
+    Tabs.Settings:AddButton({
+        Title = "Delete Config",
+        Description = "Click twice to delete the selected config",
+        Callback = function()
+            local name = getSelectedConfig()
+            if not name then return end
+            if pendingDelete ~= name or os.clock() - pendingDeleteTime > 3 then
+                pendingDelete, pendingDeleteTime = name, os.clock()
+                configNotify("Click Delete again to remove \"" .. name .. "\"")
+                return
+            end
+            pendingDelete = nil
+            if type(delfile) ~= "function" then
+                configNotify("Your executor does not support deleting files")
+                return
+            end
+            local ok, err = pcall(delfile, configPath(name))
+            if not ok then
+                configNotify("Failed to delete: " .. tostring(err))
+                return
+            end
+            refreshConfigList()
+            configNotify("Deleted \"" .. name .. "\"")
+        end,
+    })
+
+    Tabs.Settings:AddButton({
+        Title = "Refresh List",
+        Callback = function()
+            refreshConfigList()
+        end,
+    })
+end
 
 end}
