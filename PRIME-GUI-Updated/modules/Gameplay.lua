@@ -164,88 +164,18 @@ end)
 noCooldownUnsupportedExecutor = executorName:find("xeno") or executorName:find("solara")
 noCooldownInputBlocker = nil
 
-function setNoCooldownInputBlocked(blocked)
-    local noCdOption = NexusUI.Options["NoAbilityCooldown"]
-    if not noCdOption or not noCdOption.Frame then
-        return
-    end
-
-    if blocked then
-        noCdOption.Frame.Active = false
-        noCdOption.Frame.Selectable = false
-
-        if not noCooldownInputBlocker or not noCooldownInputBlocker.Parent then
-            noCooldownInputBlocker = Instance.new("TextButton")
-            noCooldownInputBlocker.Name = "UnsupportedExecutorBlocker"
-            noCooldownInputBlocker.Size = UDim2.fromScale(1, 1)
-            noCooldownInputBlocker.Position = UDim2.fromScale(0, 0)
-            noCooldownInputBlocker.BackgroundTransparency = 1
-            noCooldownInputBlocker.BorderSizePixel = 0
-            noCooldownInputBlocker.Text = ""
-            noCooldownInputBlocker.AutoButtonColor = false
-            noCooldownInputBlocker.Active = true
-            noCooldownInputBlocker.Selectable = false
-            noCooldownInputBlocker.ZIndex = 100
-            noCooldownInputBlocker.Parent = noCdOption.Frame
-        end
-    else
-        noCdOption.Frame.Active = true
-        noCdOption.Frame.Selectable = true
-
-        if noCooldownInputBlocker then
-            pcall(function()
-                noCooldownInputBlocker:Destroy()
-            end)
-            noCooldownInputBlocker = nil
-        end
-    end
-end
-
-function lockNoAbilityCooldown(reason, useBanner)
-    local noCdOption = NexusUI.Options["NoAbilityCooldown"]
-    if not noCdOption then
-        return
-    end
-
-    if NoCooldownConnection then
-        NoCooldownConnection:Disconnect()
-        NoCooldownConnection = nil
-    end
-    NoCooldownEnabled = false
-
-    if useBanner then
-        noCdOption:SetLockedText(reason or "Locked")
-    else
-        noCdOption:SetLockedText("")
-    end
-
-    noCdOption:SetLocked(true)
-    setNoCooldownInputBlocked(true)
-end
+-- No Ability Cooldown is never locked (any tier, any executor). These stay as
+-- no-op stubs so external callers (e.g. the loader) do not error.
+function setNoCooldownInputBlocked(blocked) end
+function lockNoAbilityCooldown(reason, useBanner) end
 
 if noCooldownUnsupportedExecutor then
-    local unsupportedName = executorName:find("xeno") and "Xeno" or "Solara"
-    lockNoAbilityCooldown("Not supported on " .. unsupportedName, true)
     NexusUI:Notify({
         Title = "PRIME",
-        Content = "No Ability Cooldown is not supported on your executor",
+        Content = "No Ability Cooldown may not work on your executor",
         Duration = 5
     })
-else
-    local noCdOption = NexusUI.Options["NoAbilityCooldown"]
-    if noCdOption then
-        noCdOption:SetTitle("No Ability Cooldown")
-    end
 end
-
-RegisterUnloadCallback(function()
-    if noCooldownInputBlocker then
-        pcall(function()
-            noCooldownInputBlocker:Destroy()
-        end)
-        noCooldownInputBlocker = nil
-    end
-end)
 
 Tabs.Main:AddToggle("NoStun", {
     Title = "No Stun",
