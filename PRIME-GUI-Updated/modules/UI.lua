@@ -1448,47 +1448,71 @@ function NexusUI:CreateWindow(options)
 
         function tabObject:AddToggle(id, data)
             local toggleFrame = Instance.new("Frame")
-            toggleFrame.Size = UDim2.new(1, 0, 0, IS_MOBILE and 28 or 22)
+            toggleFrame.Size = UDim2.new(1, 0, 0, IS_MOBILE and 30 or 26)
             toggleFrame.BackgroundTransparency = 1
             toggleFrame.Active = true
             toggleFrame.LayoutOrder = #controls + 1
             toggleFrame.BorderSizePixel = 0
             toggleFrame.Parent = getControlParent()
 
-            local checkbox = Instance.new("Frame")
-            checkbox.Name = "Checkbox"
-            checkbox.Size = IS_MOBILE and UDim2.fromOffset(16, 16) or UDim2.fromOffset(13, 13)
-            checkbox.Position = IS_MOBILE and UDim2.new(0, 1, 0.5, -8) or UDim2.new(0, 0, 0.5, -6)
-            NexusUI:BindColor(checkbox, "BackgroundColor3", function() return COLOR_GROUP end)
-            checkbox.BorderSizePixel = 0
-            checkbox.Active = true
-            checkbox.Parent = toggleFrame
+            -- ON / OFF pill switch on the right side of the row.
+            local SWITCH_W = IS_MOBILE and 50 or 44
+            local SWITCH_H = IS_MOBILE and 22 or 20
+            local KNOB = SWITCH_H - 6
+            local SWITCH_ON = Color3.fromRGB(34, 150, 64)
+            local SWITCH_OFF = Color3.fromRGB(10, 10, 11)
+            local SWITCH_LOCKED = Color3.fromRGB(28, 28, 30)
 
-            local checkboxCorner = Instance.new("UICorner")
-            checkboxCorner.CornerRadius = UDim.new(0, 4)
-            checkboxCorner.Parent = checkbox
+            local switch = Instance.new("Frame")
+            switch.Name = "Switch"
+            switch.AnchorPoint = Vector2.new(1, 0.5)
+            switch.Size = UDim2.fromOffset(SWITCH_W, SWITCH_H)
+            switch.Position = UDim2.new(1, -2, 0.5, 0)
+            switch.BackgroundColor3 = SWITCH_OFF
+            switch.BorderSizePixel = 0
+            switch.Parent = toggleFrame
 
-            local checkboxStroke = Instance.new("UIStroke")
-            checkboxStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-            NexusUI:BindColor(checkboxStroke, "Color", function() return COLOR_BORDER end)
-            checkboxStroke.Transparency = 0.2
-            checkboxStroke.Thickness = 1
-            checkboxStroke.Parent = checkbox
+            local switchCorner = Instance.new("UICorner")
+            switchCorner.CornerRadius = UDim.new(1, 0)
+            switchCorner.Parent = switch
 
-            local checkMark = Instance.new("TextLabel")
-            checkMark.Size = UDim2.new(1, 0, 1, 0)
-            checkMark.BackgroundTransparency = 1
-            checkMark.Text = "✓"
-            NexusUI:BindColor(checkMark, "TextColor3", function() return COLOR_ON_ACCENT end)
-            checkMark.FontFace = Font.new(FONT_BODY, Enum.FontWeight.Bold, Enum.FontStyle.Normal)
-            checkMark.TextSize = 11
-            checkMark.Visible = false
-            checkMark.ZIndex = 2
-            checkMark.Parent = checkbox
+            local switchStroke = Instance.new("UIStroke")
+            switchStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+            switchStroke.Color = Color3.fromRGB(70, 70, 76)
+            switchStroke.Transparency = 0.25
+            switchStroke.Thickness = 1
+            switchStroke.Parent = switch
+
+            local switchText = Instance.new("TextLabel")
+            switchText.Name = "State"
+            switchText.BackgroundTransparency = 1
+            switchText.Size = UDim2.new(1, -(KNOB + 6), 1, 0)
+            switchText.Position = UDim2.fromOffset(KNOB + 4, 0)
+            switchText.Text = "OFF"
+            switchText.TextColor3 = Color3.fromRGB(235, 235, 240)
+            switchText.FontFace = TEXT_FONT
+            switchText.TextSize = 7
+            switchText.TextXAlignment = Enum.TextXAlignment.Center
+            switchText.ZIndex = 2
+            switchText.Parent = switch
+
+            local knob = Instance.new("Frame")
+            knob.Name = "Knob"
+            knob.AnchorPoint = Vector2.new(0, 0.5)
+            knob.Size = UDim2.fromOffset(KNOB, KNOB)
+            knob.Position = UDim2.new(0, 3, 0.5, 0)
+            knob.BackgroundColor3 = Color3.new(1, 1, 1)
+            knob.BorderSizePixel = 0
+            knob.ZIndex = 3
+            knob.Parent = switch
+
+            local knobCorner = Instance.new("UICorner")
+            knobCorner.CornerRadius = UDim.new(1, 0)
+            knobCorner.Parent = knob
 
             local label = Instance.new("TextLabel")
-            label.Size = UDim2.new(1, IS_MOBILE and -30 or -22, 1, 0)
-            label.Position = UDim2.new(0, IS_MOBILE and 27 or 21, 0, 0)
+            label.Size = UDim2.new(1, -(SWITCH_W + 10), 1, 0)
+            label.Position = UDim2.new(0, 0, 0, 0)
             label.BackgroundTransparency = 1
             label.Text = data and data.Title or id
             NexusUI:BindColor(label, "TextColor3", function() return COLOR_TEXT end)
@@ -1524,29 +1548,33 @@ function NexusUI:CreateWindow(options)
                 Title = data and data.Title or id
             }
 
-            local function refresh(animated)
-                if locked then
-                    NexusUI:BindColor(label, "TextColor3", function() return COLOR_TEXT_DIM end)
-                    NexusUI:BindColor(checkboxStroke, "Color", function() return COLOR_BORDER end)
-                    checkboxStroke.Transparency = 0.5
-                    NexusUI:BindColor(checkbox, "BackgroundColor3", function() return COLOR_GROUP end)
-                    checkMark.Visible = false
-                elseif enabled then
-                    NexusUI:BindColor(label, "TextColor3", function() return COLOR_TEXT end)
-                    NexusUI:BindColor(checkboxStroke, "Color", function() return ACCENT end)
-                    checkboxStroke.Transparency = 0
-                    NexusUI:BindColor(checkbox, "BackgroundColor3", function() return ACCENT end)
-                    checkMark.Visible = true
+            local switchTweens = {}
+            local function setSwitch(object, props, animated)
+                if switchTweens[object] then switchTweens[object]:Cancel() end
+                if animated then
+                    switchTweens[object] = TweenService:Create(object, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props)
+                    switchTweens[object]:Play()
                 else
-                    NexusUI:BindColor(label, "TextColor3", function() return COLOR_TEXT end)
-                    NexusUI:BindColor(checkboxStroke, "Color", function() return COLOR_BORDER end)
-                    checkboxStroke.Transparency = 0.2
-                    NexusUI:BindColor(checkbox, "BackgroundColor3", function() return COLOR_GROUP end)
-                    checkMark.Visible = false
+                    for key, value in pairs(props) do object[key] = value end
                 end
+            end
+
+            local function refresh(animated)
+                local on = enabled and not locked
+                setSwitch(switch, {BackgroundColor3 = locked and SWITCH_LOCKED or (on and SWITCH_ON or SWITCH_OFF)}, animated)
+                setSwitch(knob, {
+                    Position = on and UDim2.new(1, -(KNOB + 3), 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+                    BackgroundTransparency = locked and 0.55 or 0,
+                }, animated)
+                switchStroke.Transparency = on and 1 or 0.25
+                switchText.Text = on and "ON" or "OFF"
+                switchText.Position = on and UDim2.fromOffset(2, 0) or UDim2.fromOffset(KNOB + 4, 0)
+                switchText.TextTransparency = locked and 0.6 or 0
+                NexusUI:BindColor(label, "TextColor3", function() return locked and COLOR_TEXT_DIM or COLOR_TEXT end)
+
                 lockedBanner.Visible = locked and lockedBanner.Text ~= ""
                 label.Visible = not lockedBanner.Visible
-                checkbox.Visible = not lockedBanner.Visible
+                switch.Visible = not lockedBanner.Visible
             end
             refresh(false)
 
@@ -1609,29 +1637,23 @@ function NexusUI:CreateWindow(options)
             NexusUI.Options[id] = toggleOption
             NexusUI.Toggles[id] = toggleOption
 
-            if IS_MOBILE then
-                -- A full-row TextButton gives Roblox a native touch target and reacts
-                -- much more reliably than InputBegan/InputEnded on a Frame.
-                local touchHitbox = Instance.new("TextButton")
-                touchHitbox.Name = "TouchHitbox"
-                touchHitbox.Size = UDim2.fromScale(1, 1)
-                touchHitbox.Position = UDim2.fromScale(0, 0)
-                touchHitbox.BackgroundTransparency = 1
-                touchHitbox.BorderSizePixel = 0
-                touchHitbox.Text = ""
-                touchHitbox.AutoButtonColor = false
-                touchHitbox.Active = true
-                touchHitbox.Selectable = true
-                touchHitbox.ZIndex = 5
-                touchHitbox.Parent = toggleFrame
-                TrackGuiConnection(touchHitbox.Activated:Connect(function()
-                    toggleOption:SetValue(not enabled)
-                end))
-            else
-                ConnectClick(toggleFrame, function()
-                    toggleOption:SetValue(not enabled)
-                end)
-            end
+            -- A full-row TextButton is a native click/touch target: works with mouse on PC
+            -- and tap on phones (Activated fires for both).
+            local rowHitbox = Instance.new("TextButton")
+            rowHitbox.Name = "TouchHitbox"
+            rowHitbox.Size = UDim2.fromScale(1, 1)
+            rowHitbox.Position = UDim2.fromScale(0, 0)
+            rowHitbox.BackgroundTransparency = 1
+            rowHitbox.BorderSizePixel = 0
+            rowHitbox.Text = ""
+            rowHitbox.AutoButtonColor = false
+            rowHitbox.Active = true
+            rowHitbox.Selectable = IS_MOBILE
+            rowHitbox.ZIndex = 5
+            rowHitbox.Parent = toggleFrame
+            TrackGuiConnection(rowHitbox.Activated:Connect(function()
+                toggleOption:SetValue(not enabled)
+            end))
 
             table.insert(controls, toggleFrame)
             return toggleFrame
