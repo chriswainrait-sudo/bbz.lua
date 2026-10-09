@@ -146,6 +146,46 @@ local function borderGradient()
     return g
 end
 
+-- Whole GUI uses Michroma, max size 11, uppercase. Applied automatically to every
+-- text object under a styled root, including text that changes later.
+-- Objects with the "KeepFont" attribute (and pure symbols like ✓ › ◢) are left alone.
+local TEXT_FONT = Font.new(FONT_TITLE, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+local TEXT_MAX_SIZE = 11
+
+local function styleText(obj)
+    local isBox = obj:IsA("TextBox")
+    if not (isBox or obj:IsA("TextLabel") or obj:IsA("TextButton")) then return end
+    if obj:GetAttribute("KeepFont") then return end
+
+    local function apply()
+        if obj:GetAttribute("KeepFont") then return end
+        if isBox then
+            local placeholder = string.upper(obj.PlaceholderText)
+            if placeholder ~= obj.PlaceholderText then obj.PlaceholderText = placeholder end
+        else
+            if not string.find(obj.Text, "%a") then return end
+            local upper = string.upper(obj.Text)
+            if upper ~= obj.Text then obj.Text = upper end
+        end
+        if obj.FontFace.Family ~= FONT_TITLE or obj.FontFace.Weight ~= Enum.FontWeight.Regular then
+            obj.FontFace = TEXT_FONT
+        end
+        if obj.TextSize > TEXT_MAX_SIZE then obj.TextSize = TEXT_MAX_SIZE end
+    end
+
+    apply()
+    TrackGuiConnection(obj:GetPropertyChangedSignal(isBox and "PlaceholderText" or "Text"):Connect(apply))
+    TrackGuiConnection(obj:GetPropertyChangedSignal("TextSize"):Connect(apply))
+    TrackGuiConnection(obj:GetPropertyChangedSignal("FontFace"):Connect(apply))
+end
+
+local function attachTextStyler(root)
+    for _, descendant in ipairs(root:GetDescendants()) do
+        styleText(descendant)
+    end
+    TrackGuiConnection(root.DescendantAdded:Connect(styleText))
+end
+
 MAIN_WINDOW_TRANSPARENCY = 0
 GUI_BUTTON_TRANSPARENCY = 0.25
 GUI_PANEL_TRANSPARENCY = 0.35
@@ -392,6 +432,7 @@ function NexusUI:CreateWindow(options)
     screenGui.Name = "NexusBasketballZeroUI"
     screenGui.ResetOnSpawn = false
     screenGui.Parent = GuiParent
+    attachTextStyler(screenGui)
 
     local isVisibleByDefault = options == nil or options.visible ~= false
     local mainFrame = Instance.new("Frame")
@@ -1124,6 +1165,7 @@ function NexusUI:CreateWindow(options)
         btn.AutoButtonColor = false
         btn.LayoutOrder = order
         btn.ZIndex = 5
+        btn:SetAttribute("KeepFont", true)
         btn.Parent = cornerButtons
 
         TrackGuiConnection(btn.MouseEnter:Connect(function()
@@ -1222,6 +1264,23 @@ function NexusUI:CreateWindow(options)
         local tabUnderlineCorner = Instance.new("UICorner")
         tabUnderlineCorner.CornerRadius = UDim.new(1, 0)
         tabUnderlineCorner.Parent = tabUnderline
+
+        -- Small green superscript badge, e.g. "NEW" on recently updated tabs.
+        if tabData and tabData.Badge then
+            tabButtonPadding.PaddingRight = UDim.new(0, 30)
+            local badge = Instance.new("TextLabel")
+            badge.Name = "TabBadge"
+            badge.Size = UDim2.fromOffset(26, 10)
+            badge.Position = UDim2.new(1, 2, 0.5, -11)
+            badge.BackgroundTransparency = 1
+            badge.Text = tostring(tabData.Badge)
+            badge.TextColor3 = Color3.fromRGB(70, 220, 120)
+            badge.FontFace = TEXT_FONT
+            badge.TextSize = 7
+            badge.TextXAlignment = Enum.TextXAlignment.Left
+            badge.ZIndex = 5
+            badge.Parent = tabButton
+        end
 
         TrackGuiConnection(tabButton.MouseEnter:Connect(function()
             if not tabUnderline.Visible then
@@ -1388,9 +1447,8 @@ function NexusUI:CreateWindow(options)
         end
 
         function tabObject:AddToggle(id, data)
-            local isMobileNoCooldown = IS_MOBILE and id == "NoAbilityCooldown"
             local toggleFrame = Instance.new("Frame")
-            toggleFrame.Size = UDim2.new(1, 0, 0, isMobileNoCooldown and 42 or (IS_MOBILE and 28 or 22))
+            toggleFrame.Size = UDim2.new(1, 0, 0, IS_MOBILE and 28 or 22)
             toggleFrame.BackgroundTransparency = 1
             toggleFrame.Active = true
             toggleFrame.LayoutOrder = #controls + 1
@@ -1429,12 +1487,8 @@ function NexusUI:CreateWindow(options)
             checkMark.Parent = checkbox
 
             local label = Instance.new("TextLabel")
-            label.Size = isMobileNoCooldown
-                and UDim2.new(1, -30, 0, 20)
-                or UDim2.new(1, IS_MOBILE and -30 or -22, 1, 0)
-            label.Position = isMobileNoCooldown
-                and UDim2.new(0, 27, 0, 1)
-                or UDim2.new(0, IS_MOBILE and 27 or 21, 0, 0)
+            label.Size = UDim2.new(1, IS_MOBILE and -30 or -22, 1, 0)
+            label.Position = UDim2.new(0, IS_MOBILE and 27 or 21, 0, 0)
             label.BackgroundTransparency = 1
             label.Text = data and data.Title or id
             NexusUI:BindColor(label, "TextColor3", function() return COLOR_TEXT end)
@@ -1443,24 +1497,6 @@ function NexusUI:CreateWindow(options)
             label.TextXAlignment = Enum.TextXAlignment.Left
             label.TextYAlignment = Enum.TextYAlignment.Center
             label.Parent = toggleFrame
-
-            local mobileTimerLabel = nil
-            if isMobileNoCooldown then
-                mobileTimerLabel = Instance.new("TextLabel")
-                mobileTimerLabel.Name = "MobileTimer"
-                mobileTimerLabel.Size = UDim2.new(1, -30, 0, 17)
-                mobileTimerLabel.Position = UDim2.new(0, 27, 0, 21)
-                mobileTimerLabel.BackgroundTransparency = 1
-                mobileTimerLabel.Text = ""
-                NexusUI:BindColor(mobileTimerLabel, "TextColor3", function() return COLOR_TEXT_DIM end)
-                mobileTimerLabel.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
-                mobileTimerLabel.TextSize = 11
-                mobileTimerLabel.TextXAlignment = Enum.TextXAlignment.Left
-                mobileTimerLabel.TextYAlignment = Enum.TextYAlignment.Center
-                mobileTimerLabel.TextTruncate = Enum.TextTruncate.AtEnd
-                mobileTimerLabel.ZIndex = 2
-                mobileTimerLabel.Parent = toggleFrame
-            end
 
             local lockedBanner = Instance.new("TextLabel")
             lockedBanner.Name = "LockedBanner"
@@ -1485,7 +1521,6 @@ function NexusUI:CreateWindow(options)
                 Locked = false,
                 Frame = toggleFrame,
                 Label = label,
-                MobileTimerLabel = mobileTimerLabel,
                 Title = data and data.Title or id
             }
 
@@ -1512,9 +1547,6 @@ function NexusUI:CreateWindow(options)
                 lockedBanner.Visible = locked and lockedBanner.Text ~= ""
                 label.Visible = not lockedBanner.Visible
                 checkbox.Visible = not lockedBanner.Visible
-                if mobileTimerLabel then
-                    mobileTimerLabel.Visible = not lockedBanner.Visible
-                end
             end
             refresh(false)
 
@@ -1539,26 +1571,13 @@ function NexusUI:CreateWindow(options)
 
             function toggleOption:SetTitle(text)
                 local newTitle = tostring(text or "")
+                -- Drop any bracketed suffix such as a "[LOCK 03:59:59]" countdown.
+                newTitle = newTitle:gsub("%s*%[.-%]%s*$", "")
                 if newTitle == "" then
                     newTitle = tostring(id)
                 end
                 self.Title = newTitle
-
-                if mobileTimerLabel then
-                    -- Keep the long countdown out of the function-name line on phones.
-                    -- Example: "No Ability Cooldown [LOCK 03:59:59]" becomes
-                    -- title: "No Ability Cooldown", timer: "LOCK 03:59:59".
-                    local baseTitle, timerText = newTitle:match("^(.-)%s*%[(.-)%]%s*$")
-                    if baseTitle and timerText then
-                        label.Text = baseTitle
-                        mobileTimerLabel.Text = timerText
-                    else
-                        label.Text = newTitle
-                        mobileTimerLabel.Text = ""
-                    end
-                else
-                    label.Text = newTitle
-                end
+                label.Text = newTitle
             end
 
             function toggleOption:SetDescription(text)
@@ -2325,10 +2344,11 @@ function NexusUI:Notify(options)
     notifyGui.Name = "NexusNotify"
     notifyGui.ResetOnSpawn = false
     notifyGui.Parent = GuiParent
+    attachTextStyler(notifyGui)
 
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.fromOffset(240, 48)
-    frame.Position = UDim2.new(1, -250, 0, 20)
+    frame.Size = UDim2.fromOffset(300, 54)
+    frame.Position = UDim2.new(1, -310, 0, 20)
     NexusUI:BindColor(frame, "BackgroundColor3", function() return COLOR_WINDOW end)
     frame.BackgroundTransparency = 0.02
     frame.BorderSizePixel = 0
@@ -2365,6 +2385,7 @@ function NexusUI:Notify(options)
     label.FontFace = Font.new(FONT_BODY, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
     label.TextSize = 13
     label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextWrapped = true
     label.Parent = frame
 
     task.delay((options and options.Duration or 3) + 0.2, function()
@@ -2374,7 +2395,7 @@ function NexusUI:Notify(options)
     end)
 end
 
-windowSize = IS_MOBILE and UDim2.fromOffset(620, 390) or UDim2.fromOffset(720, 460)
+windowSize = IS_MOBILE and UDim2.fromOffset(620, 390) or UDim2.fromOffset(640, 350)
 
 Window = NexusUI:CreateWindow({
     Title = "",
@@ -2401,7 +2422,7 @@ Tabs = {
     Other = Window:AddTab({ Title = "Other"})
 }
 
-Tabs.Settings = Window:AddTab({ Title = "Settings"})
+Tabs.Settings = Window:AddTab({ Title = "Settings", Badge = "New"})
 NexusUI:SetTheme("Noir")
 
 currentCloseKey = Enum.KeyCode.LeftAlt
