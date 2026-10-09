@@ -1,7 +1,7 @@
 return {Exports={},Init=function()
 -- ============================================================================
 -- COURTSIDE / BZ merge — ported below from "BasketballZero SCRIPT.lua".
--- Controls are mounted in the Aim / ESP / Zone / Movement / Misc / Visuals
+-- Controls are mounted in the ESP / Zone / Movement / Misc / Visuals
 -- tabs. Features excluded per request (not transferred, inert in config):
 -- Auto Awakening, Auto Dunk, No Cooldown Ability, Custom FOV, Fullbright,
 -- AutoDribble, AutoBlock, AutoSteal.
@@ -16,12 +16,10 @@ do
     local Http = game:GetService("HttpService")
 
     local config = {
-        Aim = false, AimTarget = "Hoop", AimRadius = 250, Smoothing = 10, Prediction = 0, AimHeld = false, ShowFOV = false,
         Speed = false, WalkSpeed = 32, Jump = false, JumpHeight = 12,
         InfiniteJump = false, Fly = false, FlySpeed = 45, Noclip = false,
         ESP = false, Boxes = true, Names = true, Health = true, Distance = true,
         PlayerFilter = "All", MaxDistance = 600, BallESP = false, HoopESP = false,
-        Hoop = "Auto (Team)",
         Trajectory = false, Horizon = 1.5,
         Theme = "Noir",
         AlwaysRun = false, 
@@ -259,10 +257,6 @@ do
     round(inventory)
     make("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10)}, inventory)
     overlay.ZIndex = 0
-    local circle = make("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
-        Position = UDim2.fromScale(0.5, 0.5), Visible = false}, overlay)
-    round(circle, 999)
-    local circleStroke = make("UIStroke", {Color = accent, Transparency = 0.4}, circle)
     local function marker(key)
         if markers[key] then return markers[key] end
         local box = make("Frame", {BackgroundTransparency = 1, Visible = false}, overlay)
@@ -330,17 +324,6 @@ do
         local hoop = folder and folder:FindFirstChild(name)
         local part = hoop and hoop:FindFirstChild("Hoop")
         return part and part:IsA("BasePart") and part or nil
-    end
-    local function selectedHoop()
-        if config.Hoop == "Home" or config.Hoop == "Away" then return hoopPart(config.Hoop) end
-        if config.Hoop == "Auto (Team)" and player.Team then
-            local part = hoopPart(player.Team.Name)
-            if part then return part end
-        end
-        local home, away = hoopPart("Home"), hoopPart("Away")
-        if not root or not home then return away or home end
-        if not away then return home end
-        return (home.Position - root.Position).Magnitude < (away.Position - root.Position).Magnitude and home or away
     end
     local function sameTeam(other)
         return player.Team ~= nil and not player.Neutral and not other.Neutral and player.Team == other.Team
@@ -639,26 +622,6 @@ do
     csSlider("CS_FlySpeed", "FlySpeed", Tabs.Movement, "Fly Speed", "Fly speed value", 5, 120, 1, 1)
     csToggle("CS_Noclip", "Noclip", Tabs.Movement, "Noclip", "Walk through obstacles")
 
-    Tabs.Main:AddSection("Camera Aim", "Right")
-    csToggle("CS_Aim", "Aim", Tabs.Main, "Camera Aim", "Aim the camera at a target")
-    csToggle("CS_AimHeld", "AimHeld", Tabs.Main, "Aim While Held", "Only aim while holding RMB")
-    local aimTargetDd = Tabs.Main:AddDropdown("CS_AimTarget", {
-        Title = "Target",
-        Default = "Hoop",
-        Values = {"Hoop", "Ball", "Nearest Opponent", "Ball Owner"},
-        Callback = function(Value) config.AimTarget = Value end,
-    })
-    local hoopDd = Tabs.Main:AddDropdown("CS_Hoop", {
-        Title = "Hoop",
-        Default = "Auto (Team)",
-        Values = {"Auto (Team)", "Home", "Away", "Nearest"},
-        Callback = function(Value) config.Hoop = Value end,
-    })
-    csSlider("CS_Smoothing", "Smoothing", Tabs.Main, "Smoothing", "Higher is smoother", 1, 30, 1, 1)
-    csSlider("CS_Prediction", "Prediction", Tabs.Main, "Prediction", "Prediction time in seconds", 0, 0.5, 0.01, 2)
-    csSlider("CS_AimRadius", "AimRadius", Tabs.Main, "Aim Radius", "Aim radius in px", 30, 800, 5, 1)
-    csToggle("CS_ShowFOV", "ShowFOV", Tabs.Main, "Show FOV Circle", "Draw the aim radius circle")
-
     Tabs.ESP:AddSection("Players")
     csToggle("CS_ESP", "ESP", Tabs.ESP, "ESP", "Enable player ESP")
     csToggle("CS_Boxes", "Boxes", Tabs.ESP, "Boxes", "Draw player boxes")
@@ -774,7 +737,6 @@ do
         if theme ~= NexusUI.ThemeName then
             theme = NexusUI.ThemeName
             accent = ACCENT
-            circleStroke.Color = accent
             inventory.BackgroundColor3 = COLOR_WINDOW
             inventory.TextColor3 = COLOR_TEXT
             up.BackgroundColor3 = COLOR_CONTROL
@@ -784,39 +746,7 @@ do
         end
         up.Visible = config.Fly and Input.TouchEnabled and humanoid ~= nil and root ~= nil and humanoid.Health > 0
         down.Visible = up.Visible
-        circle.Visible = config.ShowFOV
-        circle.Size = UDim2.fromOffset(config.AimRadius * 2, config.AimRadius * 2)
         local ball = ballPart()
-        local target
-        local center = viewport * 0.5
-        if config.Aim and not Input:GetFocusedTextBox() and (not config.AimHeld or Input:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)) then
-            if config.AimTarget == "Hoop" then target = selectedHoop()
-            elseif config.AimTarget == "Ball" then target = ball
-            elseif config.AimTarget == "Ball Owner" then
-                local owner = ballOwner()
-                target = owner and owner ~= player and owner.Character and owner.Character:FindFirstChild("HumanoidRootPart") or nil
-            else
-                local best = config.AimRadius
-                for _, other in ipairs(Players:GetPlayers()) do
-                    local model = other.Character
-                    local h = model and model:FindFirstChildOfClass("Humanoid")
-                    local part = model and model:FindFirstChild("HumanoidRootPart")
-                    if other ~= player and not sameTeam(other) and part and h and h.Health > 0 then
-                        local p, visible = camera:WorldToViewportPoint(part.Position)
-                        local d = (Vector2.new(p.X, p.Y) - center).Magnitude
-                        if visible and d < best then best = d; target = part end
-                    end
-                end
-            end
-            if target then
-                local position = target.Position + target.AssemblyLinearVelocity * config.Prediction
-                local p, visible = camera:WorldToViewportPoint(position)
-                if visible and (Vector2.new(p.X, p.Y) - center).Magnitude <= config.AimRadius and (position - camera.CFrame.Position).Magnitude > 0.01 then
-                    local alpha = 1 - math.exp(-dt * 35 / config.Smoothing)
-                    camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(camera.CFrame.Position, position), alpha)
-                end
-            end
-        end
         extras.camera(dt, camera)
         for _, m in pairs(markers) do m.box.Visible = false end
         if config.ESP then for _, other in ipairs(Players:GetPlayers()) do if other ~= player then markPlayer(other, camera) end end end
