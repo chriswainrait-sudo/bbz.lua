@@ -583,13 +583,13 @@ function NexusUI:CreateWindow(options)
 
     local isPremiumUser = IS_PREMIUM_USER
 
-    logoSubtitle.Text = isPremiumUser and "Premium" or "Freemium"
+    logoSubtitle.Text = isPremiumUser and "PREMIUM" or "FREEMIUM"
     NexusUI:BindColor(logoSubtitle, "TextColor3", function() return COLOR_TEXT end)
     logoSubtitle.TextXAlignment = Enum.TextXAlignment.Left
     logoSubtitle.TextYAlignment = Enum.TextYAlignment.Center
 
     logoSubtitle.FontFace = Font.new(FONT_TITLE, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
-    logoSubtitle.TextSize = 13
+    logoSubtitle.TextSize = 11
     logoSubtitle.ZIndex = 3
     logoSubtitle.Parent = logoContainer
     local sh = Instance.new("UIGradient")
@@ -1034,21 +1034,10 @@ function NexusUI:CreateWindow(options)
     statsFrame.Name = "PerformanceStats"
     statsFrame.Size = UDim2.fromOffset(170, 26)
     statsFrame.Position = UDim2.new(0, 10, 1, -36)
-    NexusUI:BindColor(statsFrame, "BackgroundColor3", function() return COLOR_TOPBAR end)
-    statsFrame.BackgroundTransparency = 0.12
+    statsFrame.BackgroundTransparency = 1
     statsFrame.BorderSizePixel = 0
     statsFrame.ZIndex = 6
     statsFrame.Parent = innerClip
-
-    local statsCorner = Instance.new("UICorner")
-    statsCorner.CornerRadius = UDim.new(0, 7)
-    statsCorner.Parent = statsFrame
-
-    local statsStroke = Instance.new("UIStroke")
-    statsStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    NexusUI:BindColor(statsStroke, "Color", function() return COLOR_BORDER end)
-    statsStroke.Transparency = 0.5
-    statsStroke.Parent = statsFrame
 
     local statsLabel = Instance.new("TextLabel")
     statsLabel.Size = UDim2.new(1, -12, 1, 0)
@@ -1206,10 +1195,10 @@ function NexusUI:CreateWindow(options)
         tabButton.Size = UDim2.new(0, 0, 1, -8)
         tabButton.AutomaticSize = Enum.AutomaticSize.X
         tabButton.BackgroundTransparency = 1
-        tabButton.Text = tabData and tabData.Title or "Tab"
+        tabButton.Text = string.upper(tostring(tabData and tabData.Title or "Tab"))
         NexusUI:BindColor(tabButton, "TextColor3", function() return COLOR_TEXT_DIM end)
-        tabButton.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
-        tabButton.TextSize = 15
+        tabButton.FontFace = Font.new(FONT_TITLE, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+        tabButton.TextSize = 11
         tabButton.AutoButtonColor = false
         tabButton.LayoutOrder = #tabs + 1
         tabButton.ZIndex = 4
@@ -1316,40 +1305,41 @@ function NexusUI:CreateWindow(options)
             local group = Instance.new("Frame")
             group.Size = UDim2.new(1, 0, 0, 0)
             group.AutomaticSize = Enum.AutomaticSize.Y
-            NexusUI:BindColor(group, "BackgroundColor3", function() return COLOR_GROUP end)
-            group.BackgroundTransparency = GUI_PANEL_TRANSPARENCY
+            group.BackgroundTransparency = 1
             group.BorderSizePixel = 0
             group.LayoutOrder = sectionCount
             group:SetAttribute("ColumnHome", side)
             group.Parent = parentColumn
 
-            local groupCorner = Instance.new("UICorner")
-            groupCorner.CornerRadius = UDim.new(0, 12)
-            groupCorner.Parent = group
-
-            local groupStroke = Instance.new("UIStroke")
-            groupStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-            groupStroke.Color = Color3.fromRGB(78, 78, 84)
-            groupStroke.Transparency = 0.35
-            groupStroke.Thickness = 1
-            groupStroke.Parent = group
-
             local groupLayout = Instance.new("UIListLayout")
             groupLayout.SortOrder = Enum.SortOrder.LayoutOrder
             groupLayout.Parent = group
 
-            local header = Instance.new("TextButton")
-            header.Size = UDim2.new(1, 0, 0, 32)
+            -- Plain section title with a fading hairline under it (no panel, not collapsible).
+            local header = Instance.new("Frame")
+            header.Size = UDim2.new(1, 0, 0, 30)
             header.BackgroundTransparency = 1
-            header.Text = ""
-            header.AutoButtonColor = false
             header.LayoutOrder = 0
             header.ZIndex = 2
             header.Parent = group
 
+            local headerLine = Instance.new("Frame")
+            headerLine.Size = UDim2.new(1, -4, 0, 1)
+            headerLine.Position = UDim2.new(0, 4, 1, -5)
+            headerLine.BackgroundColor3 = Color3.fromRGB(120, 120, 126)
+            headerLine.BorderSizePixel = 0
+            headerLine.ZIndex = 2
+            headerLine.Parent = header
+            local headerLineGradient = Instance.new("UIGradient")
+            headerLineGradient.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.45),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+            headerLineGradient.Parent = headerLine
+
             local headerTitle = Instance.new("TextLabel")
-            headerTitle.Size = UDim2.new(1, -40, 1, 0)
-            headerTitle.Position = UDim2.new(0, 12, 0, 0)
+            headerTitle.Size = UDim2.new(1, -8, 1, -6)
+            headerTitle.Position = UDim2.new(0, 4, 0, 0)
             headerTitle.BackgroundTransparency = 1
             headerTitle.Text = string.upper(tostring(title))
             NexusUI:BindColor(headerTitle, "TextColor3", function() return COLOR_TEXT end)
@@ -1359,18 +1349,6 @@ function NexusUI:CreateWindow(options)
             headerTitle.TextXAlignment = Enum.TextXAlignment.Left
             headerTitle.ZIndex = 2
             headerTitle.Parent = header
-
-            local headerArrow = Instance.new("TextLabel")
-            headerArrow.Size = UDim2.new(0, 20, 1, 0)
-            headerArrow.Position = UDim2.new(1, -26, 0, 0)
-            headerArrow.BackgroundTransparency = 1
-            headerArrow.Text = ">"
-            headerArrow.Rotation = 90
-            NexusUI:BindColor(headerArrow, "TextColor3", function() return COLOR_TEXT end)
-            headerArrow.FontFace = Font.new(FONT_BODY, Enum.FontWeight.Bold, Enum.FontStyle.Normal)
-            headerArrow.TextSize = 15
-            headerArrow.ZIndex = 2
-            headerArrow.Parent = header
 
             local sectionContent = Instance.new("Frame")
             sectionContent.Name = "Content"
@@ -1386,18 +1364,11 @@ function NexusUI:CreateWindow(options)
             contentLayout.Parent = sectionContent
 
             local contentPadding = Instance.new("UIPadding")
-            contentPadding.PaddingLeft = UDim.new(0, 12)
-            contentPadding.PaddingRight = UDim.new(0, 12)
-            contentPadding.PaddingBottom = UDim.new(0, 12)
+            contentPadding.PaddingLeft = UDim.new(0, 4)
+            contentPadding.PaddingRight = UDim.new(0, 6)
+            contentPadding.PaddingTop = UDim.new(0, 4)
+            contentPadding.PaddingBottom = UDim.new(0, 10)
             contentPadding.Parent = sectionContent
-
-            local collapsed = false
-            ConnectClick(header, function()
-                collapsed = not collapsed
-                sectionContent.Visible = not collapsed
-                local rotation = collapsed and 0 or 90
-                TweenService:Create(headerArrow, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {Rotation = rotation}):Play()
-            end)
 
             currentSectionContent = sectionContent
             local sectionObject = {Frame = group, Content = sectionContent}
