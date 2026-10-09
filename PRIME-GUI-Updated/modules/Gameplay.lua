@@ -34,43 +34,6 @@ AntiSlipConnection = nil
 OriginalCameraMaxZoomDistance = LocalPlayer.CameraMaxZoomDistance
 OriginalFieldOfView = workspace.CurrentCamera and workspace.CurrentCamera.FieldOfView or 70
 
-local autoSpinStylesEnabled = false
-local autoSpinStylesRun = 0
-local autoSpinStylesThread = nil
-local autoSpinStylesDependencies = nil
-
-local function getAutoSpinStylesDependencies()
-    if autoSpinStylesDependencies then return autoSpinStylesDependencies end
-    local shared = ReplicatedStorage:WaitForChild("Shared")
-    local styles = require(shared:WaitForChild("Tables"):WaitForChild("Styles")).Styles
-    local rarities = require(shared.Tables:WaitForChild("Rarities"))
-    local targets, lowestChance = {}, math.huge
-
-    for _, odds in ipairs(rarities.Odds) do
-        local chance = tonumber(odds[2])
-        if chance and chance > 0 then
-            if chance < lowestChance then
-                lowestChance = chance
-                table.clear(targets)
-            end
-            if chance == lowestChance then targets[odds[1]] = true end
-        end
-    end
-
-    assert(next(targets), "Style rarity odds are unavailable")
-    autoSpinStylesDependencies = {
-        Styles = styles,
-        Targets = targets,
-        LowestChance = lowestChance,
-    }
-    return autoSpinStylesDependencies
-end
-
-local function isAutoSpinStylesTarget(dependencies, styleName)
-    local style = dependencies.Styles[styleName]
-    return style ~= nil and dependencies.Targets[style.Rarity] == true
-end
-
 local function activateGuiButton(button)
     if not button or not button:IsA("GuiButton") then return false end
     local activated = false
@@ -95,22 +58,7 @@ local function findGuiButton(name, preferred)
     end
 end
 
-local function stopAutoSpinStyles(runId)
-    if runId ~= autoSpinStylesRun then return end
-    autoSpinStylesEnabled = false
-    autoSpinStylesThread = nil
-    local option = Options.AutoSpinStyles
-    if option and option.Value then
-        task.defer(function()
-            if option.Value then option:SetValue(false) end
-        end)
-    end
-end
-
 RegisterUnloadCallback(function()
-    autoSpinStylesEnabled = false
-    autoSpinStylesRun += 1
-    autoSpinStylesThread = nil
     waitingForKey = false
     LocalPlayer.CameraMaxZoomDistance = OriginalCameraMaxZoomDistance
 
@@ -157,78 +105,6 @@ local function localPlayerHasBall()
     end
     return false
 end
-
-Tabs.Main:AddToggle("AutoSpinStyles", {
-    Title = "Auto Spin Styles",
-    Description = "Spin until a style with the lowest drop chance is obtained",
-    Default = false,
-    Callback = function(Value)
-        autoSpinStylesRun += 1
-        local runId = autoSpinStylesRun
-        autoSpinStylesEnabled = Value
-        if not Value then
-            autoSpinStylesThread = nil
-            return
-        end
-
-        autoSpinStylesThread = task.spawn(function()
-            local dependencies
-            while autoSpinStylesEnabled and runId == autoSpinStylesRun do
-                local ok, result = pcall(getAutoSpinStylesDependencies)
-                if ok then
-                    dependencies = result
-                    break
-                end
-                task.wait(1)
-            end
-            if not dependencies or runId ~= autoSpinStylesRun then return end
-
-            while autoSpinStylesEnabled and runId == autoSpinStylesRun do
-                local styleValue = LocalPlayer:FindFirstChild("Style")
-                if not styleValue then
-                    task.wait(0.5)
-                    continue
-                end
-                if isAutoSpinStylesTarget(dependencies, styleValue.Value) then break end
-                local buySpins = PlayerGui:FindFirstChild("BuySpins")
-                if buySpins and buySpins.Enabled then break end
-                if LocalPlayer.Team ~= game.Teams:FindFirstChild("Visitor") then
-                    task.wait(0.5)
-                    continue
-                end
-
-                local styleGui = PlayerGui:FindFirstChild("Style")
-                local bg = styleGui and styleGui:FindFirstChild("BG")
-                local spin = bg and bg:FindFirstChild("Spin")
-                local counter = spin and spin:FindFirstChild("Left")
-                if counter and (counter:IsA("TextLabel") or counter:IsA("TextButton"))
-                    and counter.Text:find("$", 1, true) then break end
-                if not activateGuiButton(spin) then
-                    task.wait(1)
-                    continue
-                end
-
-                task.wait()
-                buySpins = PlayerGui:FindFirstChild("BuySpins")
-                if buySpins and buySpins.Enabled then break end
-                local confirm = bg:FindFirstChild("Confirm")
-                if confirm and confirm.Visible then
-                    activateGuiButton(confirm:FindFirstChild("Yes"))
-                end
-
-                local nextSpinAt = os.clock() + 10.25
-                repeat
-                    task.wait(0.1)
-                    if not autoSpinStylesEnabled or runId ~= autoSpinStylesRun then return end
-                    if isAutoSpinStylesTarget(dependencies, styleValue.Value) then break end
-                until os.clock() >= nextSpinAt
-
-                if isAutoSpinStylesTarget(dependencies, styleValue.Value) then break end
-            end
-            stopAutoSpinStyles(runId)
-        end)
-    end
-})
 
 NoCooldownControllerInstance = nil
 
