@@ -117,9 +117,38 @@ function Clamp(value, min, max)
     return value
 end
 
+-- Fonts: wide techno face for titles, clean geometric face for everything else.
+local FONT_BODY = "rbxasset://fonts/families/TitilliumWeb.json"
+local FONT_TITLE = "rbxasset://fonts/families/Michroma.json"
+
+-- Window background gradient (top-left light -> bottom-right deep black).
+local function windowGradient()
+    local g = Instance.new("UIGradient")
+    g.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(38, 38, 41)),
+        ColorSequenceKeypoint.new(0.35, Color3.fromRGB(17, 17, 19)),
+        ColorSequenceKeypoint.new(0.75, Color3.fromRGB(8, 8, 9)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(14, 14, 16)),
+    })
+    g.Rotation = 35
+    return g
+end
+
+-- Silver border that fades from the top-left corner.
+local function borderGradient()
+    local g = Instance.new("UIGradient")
+    g.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 150, 156)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(52, 52, 56)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(88, 88, 94)),
+    })
+    g.Rotation = 35
+    return g
+end
+
 MAIN_WINDOW_TRANSPARENCY = 0
-GUI_BUTTON_TRANSPARENCY = 0
-GUI_PANEL_TRANSPARENCY = 0
+GUI_BUTTON_TRANSPARENCY = 0.25
+GUI_PANEL_TRANSPARENCY = 0.35
 GUI_OVERLAY_TRANSPARENCY = 0
 GUI_DISABLED_TRANSPARENCY = 0.78
 
@@ -264,12 +293,8 @@ function CreateClickButton(parent, text, size, position, bgColor, textColor, fon
     label.BackgroundTransparency = 1
     label.Text = text or ""
     NexusUI:BindColor(label, "TextColor3", function() return NexusUI.Palette[textRole] end)
-    if typeof(font) == "EnumItem" then
-        label.Font = font
-    else
-        label.Font = Enum.Font.GothamSemibold
-    end
-    label.TextSize = textSize or 14
+    label.FontFace = Font.new(FONT_BODY, font == Enum.Font.GothamBold and Enum.FontWeight.Bold or Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+    label.TextSize = (textSize or 14) + 1
     label.TextXAlignment = Enum.TextXAlignment.Center
     label.TextYAlignment = Enum.TextYAlignment.Center
     label.ZIndex = 11
@@ -377,7 +402,8 @@ function NexusUI:CreateWindow(options)
     mainFrame.Size = requestedSize
     mainFrame.Position = options and options.Position or UDim2.fromOffset(40, 40)
     mainFrame.Visible = isVisibleByDefault
-    NexusUI:BindColor(mainFrame, "BackgroundColor3", function() return COLOR_WINDOW end)
+    mainFrame.BackgroundColor3 = Color3.new(1, 1, 1)
+    windowGradient().Parent = mainFrame
     mainFrame.BackgroundTransparency = MAIN_WINDOW_TRANSPARENCY
     mainFrame.BorderSizePixel = 0
     mainFrame.ClipsDescendants = false
@@ -412,30 +438,48 @@ function NexusUI:CreateWindow(options)
 
     local mainCorner = Instance.new("UICorner")
     mainCorner.Name = "NexusMainCorner"
-    mainCorner.CornerRadius = UDim.new(0, 14)
+    mainCorner.CornerRadius = UDim.new(0, 18)
     mainCorner.Parent = mainFrame
 
     local mainStroke = Instance.new("UIStroke")
     mainStroke.Name = "NexusMainStroke"
     mainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    NexusUI:BindColor(mainStroke, "Color", function() return COLOR_BORDER end)
-    mainStroke.Transparency = 0.15
-    mainStroke.Thickness = 1
+    mainStroke.Color = Color3.new(1, 1, 1)
+    mainStroke.Transparency = 0.1
+    mainStroke.Thickness = 1.2
     mainStroke.LineJoinMode = Enum.LineJoinMode.Round
     mainStroke.Parent = mainFrame
+    borderGradient().Parent = mainStroke
 
     local innerClip = Instance.new("Frame")
     innerClip.Name = "InnerClip"
     innerClip.Size = UDim2.new(1, 0, 1, 0)
-    NexusUI:BindColor(innerClip, "BackgroundColor3", function() return COLOR_WINDOW end)
-    innerClip.BackgroundTransparency = MAIN_WINDOW_TRANSPARENCY
+    innerClip.BackgroundTransparency = 1
     innerClip.BorderSizePixel = 0
     innerClip.ClipsDescendants = true
     innerClip.Parent = mainFrame
 
     local innerCorner = Instance.new("UICorner")
-    innerCorner.CornerRadius = UDim.new(0, 14)
+    innerCorner.CornerRadius = UDim.new(0, 18)
     innerCorner.Parent = innerClip
+
+    -- Soft light sheen across the top-left, like a glass panel.
+    local sheen = Instance.new("Frame")
+    sheen.Name = "Sheen"
+    sheen.Size = UDim2.fromScale(1, 1)
+    sheen.BackgroundColor3 = Color3.new(1, 1, 1)
+    sheen.BorderSizePixel = 0
+    sheen.ZIndex = 0
+    sheen.Parent = innerClip
+    local sheenGradient = Instance.new("UIGradient")
+    sheenGradient.Rotation = 35
+    sheenGradient.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.93),
+        NumberSequenceKeypoint.new(0.3, 0.985),
+        NumberSequenceKeypoint.new(0.85, 1),
+        NumberSequenceKeypoint.new(1, 0.97),
+    })
+    sheenGradient.Parent = sheen
 
     local animationDuration = 0.18
     local function animateWindowIn()
@@ -477,13 +521,12 @@ function NexusUI:CreateWindow(options)
         end)
     end
 
-    local topBarHeight = 36
+    local topBarHeight = 46
     local topBar = Instance.new("Frame")
     topBar.Name = "TopBar"
     topBar.Size = UDim2.new(1, 0, 0, topBarHeight)
     topBar.Position = UDim2.new(0, 0, 0, 0)
-    NexusUI:BindColor(topBar, "BackgroundColor3", function() return COLOR_TOPBAR end)
-    topBar.BackgroundTransparency = GUI_OVERLAY_TRANSPARENCY
+    topBar.BackgroundTransparency = 1
     topBar.BorderSizePixel = 0
     topBar.ZIndex = 2
     topBar.Active = true
@@ -493,23 +536,22 @@ function NexusUI:CreateWindow(options)
     topBarCorner.CornerRadius = UDim.new(0, 14)
     topBarCorner.Parent = topBar
 
-    local topBarPatch = Instance.new("Frame")
-    topBarPatch.Size = UDim2.new(1, 0, 0, 14)
-    topBarPatch.Position = UDim2.new(0, 0, 1, -14)
-    NexusUI:BindColor(topBarPatch, "BackgroundColor3", function() return COLOR_TOPBAR end)
-    topBarPatch.BackgroundTransparency = GUI_OVERLAY_TRANSPARENCY
-    topBarPatch.BorderSizePixel = 0
-    topBarPatch.ZIndex = 2
-    topBarPatch.Parent = topBar
-
+    -- Hairline divider that fades out toward both edges.
     local topBarDivider = Instance.new("Frame")
-    topBarDivider.Size = UDim2.new(1, 0, 0, 1)
-    topBarDivider.Position = UDim2.new(0, 0, 1, -1)
-    NexusUI:BindColor(topBarDivider, "BackgroundColor3", function() return COLOR_BORDER end)
-    topBarDivider.BackgroundTransparency = 0.4
+    topBarDivider.Size = UDim2.new(1, -28, 0, 1)
+    topBarDivider.Position = UDim2.new(0, 14, 1, -1)
+    topBarDivider.BackgroundColor3 = Color3.fromRGB(120, 120, 126)
     topBarDivider.BorderSizePixel = 0
     topBarDivider.ZIndex = 3
     topBarDivider.Parent = topBar
+    local dividerGradient = Instance.new("UIGradient")
+    dividerGradient.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.2, 0.55),
+        NumberSequenceKeypoint.new(0.8, 0.55),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    dividerGradient.Parent = topBarDivider
 
     local logoContainer = Instance.new("Frame")
     logoContainer.Name = "LogoContainer"
@@ -546,8 +588,8 @@ function NexusUI:CreateWindow(options)
     logoSubtitle.TextXAlignment = Enum.TextXAlignment.Left
     logoSubtitle.TextYAlignment = Enum.TextYAlignment.Center
 
-    logoSubtitle.FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", isPremiumUser and Enum.FontWeight.Bold or Enum.FontWeight.Medium, Enum.FontStyle.Normal)
-    logoSubtitle.TextSize = 15
+    logoSubtitle.FontFace = Font.new(FONT_TITLE, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+    logoSubtitle.TextSize = 13
     logoSubtitle.ZIndex = 3
     logoSubtitle.Parent = logoContainer
     local sh = Instance.new("UIGradient")
@@ -613,7 +655,7 @@ function NexusUI:CreateWindow(options)
         tabSwipeHint.BackgroundTransparency = 1
         tabSwipeHint.Text = "Swipe tabs left / right  ↔"
         NexusUI:BindColor(tabSwipeHint, "TextColor3", function() return COLOR_TEXT_DIM end)
-        tabSwipeHint.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
+        tabSwipeHint.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
         tabSwipeHint.TextSize = 9
         tabSwipeHint.TextXAlignment = Enum.TextXAlignment.Right
         tabSwipeHint.TextYAlignment = Enum.TextYAlignment.Center
@@ -759,53 +801,41 @@ function NexusUI:CreateWindow(options)
         local dialog = Instance.new("Frame")
         dialog.Size = UDim2.new(1, 0, 1, 0)
         dialog.Position = UDim2.new(0, 0, 0, 0)
-        NexusUI:BindColor(dialog, "BackgroundColor3", function() return COLOR_WINDOW end)
+        dialog.BackgroundColor3 = Color3.new(1, 1, 1)
+        windowGradient().Parent = dialog
         dialog.BorderSizePixel = 0
-        dialog.BackgroundTransparency = GUI_OVERLAY_TRANSPARENCY
+        dialog.BackgroundTransparency = 0
         dialog.ClipsDescendants = true
         dialog.ZIndex = 51
         dialog.Parent = closeConfirmGui
 
         local dialogCorner = Instance.new("UICorner")
-        dialogCorner.CornerRadius = UDim.new(0, 6)
+        dialogCorner.CornerRadius = UDim.new(0, 16)
         dialogCorner.Parent = dialog
 
         local dialogStroke = Instance.new("UIStroke")
         dialogStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-        NexusUI:BindColor(dialogStroke, "Color", function() return COLOR_BORDER end)
-        dialogStroke.Transparency = 0.4
-        dialogStroke.Thickness = 1
+        dialogStroke.Color = Color3.new(1, 1, 1)
+        dialogStroke.Transparency = 0.1
+        dialogStroke.Thickness = 1.2
         dialogStroke.Parent = dialog
+        borderGradient().Parent = dialogStroke
 
         local dialogTop = Instance.new("Frame")
         dialogTop.Size = UDim2.new(1, 0, 0, 40)
         dialogTop.Position = UDim2.new(0, 0, 0, 0)
-        NexusUI:BindColor(dialogTop, "BackgroundColor3", function() return COLOR_TOPBAR end)
         dialogTop.BorderSizePixel = 0
-        dialogTop.BackgroundTransparency = GUI_OVERLAY_TRANSPARENCY
+        dialogTop.BackgroundTransparency = 1
         dialogTop.ZIndex = 52
         dialogTop.Parent = dialog
 
-        local dialogTopCorner = Instance.new("UICorner")
-        dialogTopCorner.CornerRadius = UDim.new(0, 6)
-        dialogTopCorner.Parent = dialogTop
-
-        local dialogTopPatch = Instance.new("Frame")
-        dialogTopPatch.Size = UDim2.new(1, 0, 0, 6)
-        dialogTopPatch.Position = UDim2.new(0, 0, 1, -6)
-        NexusUI:BindColor(dialogTopPatch, "BackgroundColor3", function() return COLOR_TOPBAR end)
-        dialogTopPatch.BackgroundTransparency = GUI_OVERLAY_TRANSPARENCY
-        dialogTopPatch.BorderSizePixel = 0
-        dialogTopPatch.ZIndex = 52
-        dialogTopPatch.Parent = dialogTop
-
         local dialogTitle = Instance.new("TextLabel")
         dialogTitle.Size = UDim2.new(1, -24, 0, 26)
-        dialogTitle.Position = UDim2.new(0, 0, 0, 7)
+        dialogTitle.Position = UDim2.new(0, 16, 0, 10)
         dialogTitle.BackgroundTransparency = 1
-        dialogTitle.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
-        dialogTitle.TextSize = 17
-        dialogTitle.Text = "Confirm Close"
+        dialogTitle.FontFace = Font.new(FONT_TITLE, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+        dialogTitle.TextSize = 14
+        dialogTitle.Text = "CONFIRM CLOSE"
         NexusUI:BindColor(dialogTitle, "TextColor3", function() return COLOR_TEXT end)
         dialogTitle.TextXAlignment = Enum.TextXAlignment.Left
         dialogTitle.TextYAlignment = Enum.TextYAlignment.Center
@@ -814,9 +844,9 @@ function NexusUI:CreateWindow(options)
 
         local dialogText = Instance.new("TextLabel")
         dialogText.Size = UDim2.new(1, -24, 0, 48)
-        dialogText.Position = UDim2.new(0, 12, 0, 52)
+        dialogText.Position = UDim2.new(0, 16, 0, 52)
         dialogText.BackgroundTransparency = 1
-        dialogText.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
+        dialogText.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
         dialogText.TextSize = 14
         dialogText.Text = "Press 'Hide' to minimize the UI, or 'Close' to remove it completely."
         NexusUI:BindColor(dialogText, "TextColor3", function() return COLOR_TEXT end)
@@ -851,7 +881,12 @@ function NexusUI:CreateWindow(options)
             15,
             true
         )
-        hideButton.BackgroundTransparency = 1
+        hideButton.BackgroundTransparency = 0.2
+        local hideStroke = Instance.new("UIStroke")
+        hideStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        hideStroke.Color = Color3.fromRGB(70, 70, 76)
+        hideStroke.Transparency = 0.2
+        hideStroke.Parent = hideButton
         if hideLabel then
             hideLabel.Text = "Hide"
             hideLabel.TextTransparency = 0
@@ -871,10 +906,14 @@ function NexusUI:CreateWindow(options)
             15,
             true
         )
-        closeConfirmButton.BackgroundTransparency = 1
+        closeConfirmButton.BackgroundTransparency = 0
+        local closeGradient = Instance.new("UIGradient")
+        closeGradient.Rotation = 90
+        closeGradient.Color = ColorSequence.new(Color3.fromRGB(250, 250, 252), Color3.fromRGB(190, 190, 196))
+        closeGradient.Parent = closeConfirmButton
         if closeConfirmLabel then
             closeConfirmLabel.Text = "Close"
-            NexusUI:BindColor(closeConfirmLabel, "TextColor3", function() return COLOR_TEXT end)
+            NexusUI:BindColor(closeConfirmLabel, "TextColor3", function() return COLOR_ON_ACCENT end)
             closeConfirmLabel.TextTransparency = 0
             closeConfirmLabel.ZIndex = 55
         end
@@ -1017,8 +1056,8 @@ function NexusUI:CreateWindow(options)
     statsLabel.BackgroundTransparency = 1
     statsLabel.Text = "FPS  --    PING  -- ms"
     NexusUI:BindColor(statsLabel, "TextColor3", function() return COLOR_TEXT_DIM end)
-    statsLabel.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
-    statsLabel.TextSize = 11
+    statsLabel.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+    statsLabel.TextSize = 12
     statsLabel.TextXAlignment = Enum.TextXAlignment.Left
     statsLabel.ZIndex = 7
     statsLabel.Parent = statsFrame
@@ -1169,8 +1208,8 @@ function NexusUI:CreateWindow(options)
         tabButton.BackgroundTransparency = 1
         tabButton.Text = tabData and tabData.Title or "Tab"
         NexusUI:BindColor(tabButton, "TextColor3", function() return COLOR_TEXT_DIM end)
-        tabButton.FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
-        tabButton.TextSize = 13
+        tabButton.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+        tabButton.TextSize = 15
         tabButton.AutoButtonColor = false
         tabButton.LayoutOrder = #tabs + 1
         tabButton.ZIndex = 4
@@ -1191,6 +1230,9 @@ function NexusUI:CreateWindow(options)
         tabUnderline.Visible = false
         tabUnderline.ZIndex = 4
         tabUnderline.Parent = tabButton
+        local tabUnderlineCorner = Instance.new("UICorner")
+        tabUnderlineCorner.CornerRadius = UDim.new(1, 0)
+        tabUnderlineCorner.Parent = tabUnderline
 
         TrackGuiConnection(tabButton.MouseEnter:Connect(function()
             if not tabUnderline.Visible then
@@ -1282,13 +1324,13 @@ function NexusUI:CreateWindow(options)
             group.Parent = parentColumn
 
             local groupCorner = Instance.new("UICorner")
-            groupCorner.CornerRadius = UDim.new(0, 10)
+            groupCorner.CornerRadius = UDim.new(0, 12)
             groupCorner.Parent = group
 
             local groupStroke = Instance.new("UIStroke")
             groupStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-            NexusUI:BindColor(groupStroke, "Color", function() return COLOR_BORDER end)
-            groupStroke.Transparency = 0.4
+            groupStroke.Color = Color3.fromRGB(78, 78, 84)
+            groupStroke.Transparency = 0.35
             groupStroke.Thickness = 1
             groupStroke.Parent = group
 
@@ -1297,7 +1339,7 @@ function NexusUI:CreateWindow(options)
             groupLayout.Parent = group
 
             local header = Instance.new("TextButton")
-            header.Size = UDim2.new(1, 0, 0, 26)
+            header.Size = UDim2.new(1, 0, 0, 32)
             header.BackgroundTransparency = 1
             header.Text = ""
             header.AutoButtonColor = false
@@ -1307,12 +1349,13 @@ function NexusUI:CreateWindow(options)
 
             local headerTitle = Instance.new("TextLabel")
             headerTitle.Size = UDim2.new(1, -40, 1, 0)
-            headerTitle.Position = UDim2.new(0, 8, 0, 0)
+            headerTitle.Position = UDim2.new(0, 12, 0, 0)
             headerTitle.BackgroundTransparency = 1
-            headerTitle.Text = title
+            headerTitle.Text = string.upper(tostring(title))
             NexusUI:BindColor(headerTitle, "TextColor3", function() return COLOR_TEXT end)
-            headerTitle.FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
-            headerTitle.TextSize = 13
+            headerTitle.FontFace = Font.new(FONT_TITLE, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+            headerTitle.TextSize = 11
+            headerTitle.TextTruncate = Enum.TextTruncate.AtEnd
             headerTitle.TextXAlignment = Enum.TextXAlignment.Left
             headerTitle.ZIndex = 2
             headerTitle.Parent = header
@@ -1324,7 +1367,7 @@ function NexusUI:CreateWindow(options)
             headerArrow.Text = ">"
             headerArrow.Rotation = 90
             NexusUI:BindColor(headerArrow, "TextColor3", function() return COLOR_TEXT end)
-            headerArrow.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+            headerArrow.FontFace = Font.new(FONT_BODY, Enum.FontWeight.Bold, Enum.FontStyle.Normal)
             headerArrow.TextSize = 15
             headerArrow.ZIndex = 2
             headerArrow.Parent = header
@@ -1338,14 +1381,14 @@ function NexusUI:CreateWindow(options)
             sectionContent.Parent = group
 
             local contentLayout = Instance.new("UIListLayout")
-            contentLayout.Padding = UDim.new(0, 2)
+            contentLayout.Padding = UDim.new(0, 5)
             contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
             contentLayout.Parent = sectionContent
 
             local contentPadding = Instance.new("UIPadding")
-            contentPadding.PaddingLeft = UDim.new(0, 8)
-            contentPadding.PaddingRight = UDim.new(0, 8)
-            contentPadding.PaddingBottom = UDim.new(0, 8)
+            contentPadding.PaddingLeft = UDim.new(0, 12)
+            contentPadding.PaddingRight = UDim.new(0, 12)
+            contentPadding.PaddingBottom = UDim.new(0, 12)
             contentPadding.Parent = sectionContent
 
             local collapsed = false
@@ -1376,7 +1419,7 @@ function NexusUI:CreateWindow(options)
         function tabObject:AddToggle(id, data)
             local isMobileNoCooldown = IS_MOBILE and id == "NoAbilityCooldown"
             local toggleFrame = Instance.new("Frame")
-            toggleFrame.Size = UDim2.new(1, 0, 0, isMobileNoCooldown and 42 or (IS_MOBILE and 28 or 18))
+            toggleFrame.Size = UDim2.new(1, 0, 0, isMobileNoCooldown and 42 or (IS_MOBILE and 28 or 22))
             toggleFrame.BackgroundTransparency = 1
             toggleFrame.Active = true
             toggleFrame.LayoutOrder = #controls + 1
@@ -1393,7 +1436,7 @@ function NexusUI:CreateWindow(options)
             checkbox.Parent = toggleFrame
 
             local checkboxCorner = Instance.new("UICorner")
-            checkboxCorner.CornerRadius = UDim.new(0, 3)
+            checkboxCorner.CornerRadius = UDim.new(0, 4)
             checkboxCorner.Parent = checkbox
 
             local checkboxStroke = Instance.new("UIStroke")
@@ -1408,7 +1451,7 @@ function NexusUI:CreateWindow(options)
             checkMark.BackgroundTransparency = 1
             checkMark.Text = "✓"
             NexusUI:BindColor(checkMark, "TextColor3", function() return COLOR_ON_ACCENT end)
-            checkMark.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+            checkMark.FontFace = Font.new(FONT_BODY, Enum.FontWeight.Bold, Enum.FontStyle.Normal)
             checkMark.TextSize = 11
             checkMark.Visible = false
             checkMark.ZIndex = 2
@@ -1424,8 +1467,8 @@ function NexusUI:CreateWindow(options)
             label.BackgroundTransparency = 1
             label.Text = data and data.Title or id
             NexusUI:BindColor(label, "TextColor3", function() return COLOR_TEXT end)
-            label.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
-            label.TextSize = 13
+            label.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+            label.TextSize = 15
             label.TextXAlignment = Enum.TextXAlignment.Left
             label.TextYAlignment = Enum.TextYAlignment.Center
             label.Parent = toggleFrame
@@ -1439,7 +1482,7 @@ function NexusUI:CreateWindow(options)
                 mobileTimerLabel.BackgroundTransparency = 1
                 mobileTimerLabel.Text = ""
                 NexusUI:BindColor(mobileTimerLabel, "TextColor3", function() return COLOR_TEXT_DIM end)
-                mobileTimerLabel.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
+                mobileTimerLabel.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
                 mobileTimerLabel.TextSize = 11
                 mobileTimerLabel.TextXAlignment = Enum.TextXAlignment.Left
                 mobileTimerLabel.TextYAlignment = Enum.TextYAlignment.Center
@@ -1454,7 +1497,7 @@ function NexusUI:CreateWindow(options)
             lockedBanner.BackgroundTransparency = 1
             lockedBanner.Text = data and data.LockedText or ""
             NexusUI:BindColor(lockedBanner, "TextColor3", function() return COLOR_TEXT_DIM end)
-            lockedBanner.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
+            lockedBanner.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
             lockedBanner.TextSize = 12
             lockedBanner.TextXAlignment = Enum.TextXAlignment.Center
             lockedBanner.TextYAlignment = Enum.TextYAlignment.Center
@@ -1618,8 +1661,8 @@ function NexusUI:CreateWindow(options)
             label.BackgroundTransparency = 1
             label.Text = data and data.Title or id
             NexusUI:BindColor(label, "TextColor3", function() return COLOR_TEXT end)
-            label.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
-            label.TextSize = 13
+            label.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+            label.TextSize = 15
             label.TextXAlignment = Enum.TextXAlignment.Left
             label.Parent = frame
 
@@ -1629,7 +1672,7 @@ function NexusUI:CreateWindow(options)
             valueLabel.BackgroundTransparency = 1
             valueLabel.Text = tostring(data and data.Default or 0)
             NexusUI:BindColor(valueLabel, "TextColor3", function() return COLOR_TEXT_DIM end)
-            valueLabel.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
+            valueLabel.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
             valueLabel.TextSize = 12
             valueLabel.TextXAlignment = Enum.TextXAlignment.Right
             valueLabel.Parent = frame
@@ -1778,7 +1821,7 @@ function NexusUI:CreateWindow(options)
             dropdownFrame.Parent = getControlParent()
 
             local dropdownCorner = Instance.new("UICorner")
-            dropdownCorner.CornerRadius = UDim.new(0, 9)
+            dropdownCorner.CornerRadius = UDim.new(0, 10)
             dropdownCorner.Parent = dropdownFrame
 
             local dropdownStroke = Instance.new("UIStroke")
@@ -1794,7 +1837,7 @@ function NexusUI:CreateWindow(options)
             title.BackgroundTransparency = 1
             title.Text = data and data.Title or id
             NexusUI:BindColor(title, "TextColor3", function() return COLOR_TEXT_DIM end)
-            title.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
+            title.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
             title.TextSize = 12
             title.TextXAlignment = Enum.TextXAlignment.Left
             title.Parent = dropdownFrame
@@ -2075,7 +2118,7 @@ function NexusUI:CreateWindow(options)
             local hasDesc = data and data.Description and data.Description ~= ""
 
             local buttonFrame = Instance.new("Frame")
-            buttonFrame.Size = hasDesc and UDim2.new(1, 0, 0, 50) or UDim2.new(1, 0, 0, 34)
+            buttonFrame.Size = hasDesc and UDim2.new(1, 0, 0, 52) or UDim2.new(1, 0, 0, 38)
             NexusUI:BindColor(buttonFrame, "BackgroundColor3", function() return COLOR_CONTROL end)
             buttonFrame.BackgroundTransparency = GUI_BUTTON_TRANSPARENCY
             buttonFrame.LayoutOrder = #controls + 1
@@ -2084,7 +2127,7 @@ function NexusUI:CreateWindow(options)
             buttonFrame.Parent = getControlParent()
 
             local bCorner = Instance.new("UICorner")
-            bCorner.CornerRadius = UDim.new(0, 4)
+            bCorner.CornerRadius = UDim.new(0, 10)
             bCorner.Parent = buttonFrame
 
             local bStroke = Instance.new("UIStroke")
@@ -2098,8 +2141,8 @@ function NexusUI:CreateWindow(options)
             titleLabel.BackgroundTransparency = 1
             titleLabel.Text = data and data.Title or "Button"
             NexusUI:BindColor(titleLabel, "TextColor3", function() return COLOR_TEXT end)
-            titleLabel.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
-            titleLabel.TextSize = 13
+            titleLabel.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+            titleLabel.TextSize = 15
             titleLabel.TextXAlignment = Enum.TextXAlignment.Left
             titleLabel.TextYAlignment = Enum.TextYAlignment.Center
             if hasDesc then
@@ -2118,8 +2161,8 @@ function NexusUI:CreateWindow(options)
                 descLabel.BackgroundTransparency = 1
                 descLabel.Text = data.Description
                 NexusUI:BindColor(descLabel, "TextColor3", function() return COLOR_TEXT_DIM end)
-                descLabel.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
-                descLabel.TextSize = 11
+                descLabel.FontFace = Font.new(FONT_BODY, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+                descLabel.TextSize = 12
                 descLabel.TextXAlignment = Enum.TextXAlignment.Left
                 descLabel.TextWrapped = true
                 descLabel.Parent = buttonFrame
@@ -2132,7 +2175,7 @@ function NexusUI:CreateWindow(options)
             arrowLabel.BackgroundTransparency = 1
             arrowLabel.Text = ">"
             NexusUI:BindColor(arrowLabel, "TextColor3", function() return COLOR_TEXT_DIM end)
-            arrowLabel.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+            arrowLabel.FontFace = Font.new(FONT_BODY, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
             arrowLabel.TextSize = 14
             arrowLabel.ZIndex = buttonFrame.ZIndex + 1
             arrowLabel.Parent = buttonFrame
@@ -2348,7 +2391,7 @@ function NexusUI:Notify(options)
     label.BackgroundTransparency = 1
     label.Text = (options and options.Title or "Notify") .. "\n" .. (options and options.Content or "")
     NexusUI:BindColor(label, "TextColor3", function() return COLOR_TEXT end)
-    label.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+    label.FontFace = Font.new(FONT_BODY, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
     label.TextSize = 13
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = frame
@@ -2405,7 +2448,7 @@ keybindRow.LayoutOrder = 2
 keybindRow.Parent = SettingsSection.Content
 
 keybindRowCorner = Instance.new("UICorner")
-keybindRowCorner.CornerRadius = UDim.new(0, 4)
+keybindRowCorner.CornerRadius = UDim.new(0, 10)
 keybindRowCorner.Parent = keybindRow
 
 keybindTitle = Instance.new("TextLabel")
@@ -2414,7 +2457,7 @@ keybindTitle.Position = UDim2.new(0, 8, 0, 8)
 keybindTitle.BackgroundTransparency = 1
 keybindTitle.Text = "Toggle GUI"
 NexusUI:BindColor(keybindTitle, "TextColor3", function() return COLOR_TEXT end)
-keybindTitle.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
+keybindTitle.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
 keybindTitle.TextSize = 15
 keybindTitle.TextXAlignment = Enum.TextXAlignment.Left
 keybindTitle.Parent = keybindRow
@@ -2425,7 +2468,7 @@ keybindHint.Position = UDim2.new(0, 8, 0, 27)
 keybindHint.BackgroundTransparency = 1
 keybindHint.Text = "Click box to rebind"
 NexusUI:BindColor(keybindHint, "TextColor3", function() return COLOR_TEXT_DIM end)
-keybindHint.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+keybindHint.FontFace = Font.new(FONT_BODY, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
 keybindHint.TextSize = 11
 keybindHint.TextXAlignment = Enum.TextXAlignment.Left
 keybindHint.Parent = keybindRow
@@ -2457,7 +2500,7 @@ keybindBadgeLabel.Position = UDim2.new(0, 3, 0, 0)
 keybindBadgeLabel.BackgroundTransparency = 1
 keybindBadgeLabel.Text = "LeftAlt"
 NexusUI:BindColor(keybindBadgeLabel, "TextColor3", function() return COLOR_TEXT end)
-keybindBadgeLabel.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
+keybindBadgeLabel.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
 keybindBadgeLabel.TextSize = 13
 keybindBadgeLabel.TextTruncate = Enum.TextTruncate.AtEnd
 keybindBadgeLabel.ZIndex = 6
@@ -2694,7 +2737,7 @@ do
 
     -- Config name input
     local nameRow = Instance.new("Frame")
-    nameRow.Size = UDim2.new(1, 0, 0, 34)
+    nameRow.Size = UDim2.new(1, 0, 0, 38)
     NexusUI:BindColor(nameRow, "BackgroundColor3", function() return COLOR_CONTROL end)
     nameRow.BackgroundTransparency = GUI_BUTTON_TRANSPARENCY
     nameRow.BorderSizePixel = 0
@@ -2702,7 +2745,7 @@ do
     nameRow.Parent = ConfigSection.Content
 
     local nameRowCorner = Instance.new("UICorner")
-    nameRowCorner.CornerRadius = UDim.new(0, 4)
+    nameRowCorner.CornerRadius = UDim.new(0, 10)
     nameRowCorner.Parent = nameRow
 
     local nameRowStroke = Instance.new("UIStroke")
@@ -2721,8 +2764,8 @@ do
     nameBox.PlaceholderText = "Config name..."
     NexusUI:BindColor(nameBox, "TextColor3", function() return COLOR_TEXT end)
     NexusUI:BindColor(nameBox, "PlaceholderColor3", function() return COLOR_TEXT_DIM end)
-    nameBox.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
-    nameBox.TextSize = 13
+    nameBox.FontFace = Font.new(FONT_BODY, Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+    nameBox.TextSize = 15
     nameBox.TextXAlignment = Enum.TextXAlignment.Left
     nameBox.TextTruncate = Enum.TextTruncate.AtEnd
     nameBox.ZIndex = 5
