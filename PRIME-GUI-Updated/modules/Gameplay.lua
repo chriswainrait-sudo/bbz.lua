@@ -1680,7 +1680,7 @@ end
     }
     for _, control in ipairs(controls) do
         local key, title, description = control[1], control[2], control[3]
-        Tabs.Main:AddToggle(key, {Title = title, Description = description, Default = false,
+        Tabs.Main:AddToggle(key, {Title = title, Description = description, ShowDescription = key == "PerfectShot", Default = false,
             Callback = function(value) setFeature(key, value) end})
     end
 -- No Steal Fall: scoped to the local character's ordinary Steal animation.
