@@ -486,7 +486,8 @@ end
 
 
 
-function GetCurrentBall()
+local perfectShotLock
+function GetCurrentBall(withPhysicsLock)
     local reference = ReplicatedStorage:FindFirstChild("Basketball")
     if not reference or not reference:IsA("ObjectValue") then
         return nil
@@ -494,6 +495,7 @@ function GetCurrentBall()
 
     local ball = reference.Value
     if ball and ball:IsA("BasePart") and ball:IsDescendantOf(Workspace) then
+        if withPhysicsLock then return ball, perfectShotLock and perfectShotLock.ball == ball and os.clock() < perfectShotLock.expires or false end
         return ball
     end
     return nil
@@ -1104,12 +1106,13 @@ do
 end
 
     local config = {StealDanger = false, InfiniteDribble = false, AutoDribble = false,
-        SilentAimShot = false, AutoDunk = false, BounceReturn = false}
+        SilentAimShot = false, AutoDunk = false, BounceReturn = false, PerfectShot = false}
     local controllers, connections, roundConnections = {}, {}, {}
     local alive = false
     local heartbeat, discoveryTask, dangerGui, dangerLabel
     local infinitePatch, throwPatch
     local returnFlight
+    local perfectFlight
     local lastScan, lastThreatCheck, lastDribble = 0, 0, -math.huge
     local actionBusy, actionEpoch = false, 0
     local stealIds = {}
@@ -1345,6 +1348,76 @@ end
         returnFlight = nil
         if flight and flight.touch then flight.touch:Disconnect() end
     end
+    local function clearPerfect()
+        perfectFlight = nil
+        perfectShotLock = nil
+    end
+    -- BEGIN PERFECT SHOT BALLISTICS
+    local function shotVelocity(origin, target, gravity)
+        if type(gravity) ~= "number" or gravity <= 0 then return nil end
+        local delta = target - origin
+        local distance = Vector2.new(delta.X, delta.Z).Magnitude
+        local height = math.max(8, math.min(45, distance * 0.12))
+        local apex = math.max(origin.Y, target.Y) + height
+        local vertical = math.sqrt(2 * gravity * (apex - origin.Y))
+        local seconds = (vertical + math.sqrt(2 * gravity * (apex - target.Y))) / gravity
+        if seconds <= 0 or seconds ~= seconds or seconds == math.huge then return nil end
+        return Vector3.new(delta.X / seconds, vertical, delta.Z / seconds), seconds
+    end
+    -- END PERFECT SHOT BALLISTICS
+    local function armPerfect()
+        clearPerfect()
+        clearReturn()
+        local ball = GetCurrentBall()
+        local hoop = targetHoop()
+        if not ball or not hoop or not playing() or not hasBall() then return end
+        perfectFlight = {ball = ball, hoop = hoop, character = LocalPlayer.Character,
+            started = os.clock(), confirmed = false}
+        perfectShotLock = {ball = ball, expires = os.clock() + 2}
+    end
+    local function updatePerfect(dt)
+        local flight = perfectFlight
+        if not flight then return end
+        local ball, controller = flight.ball, controllers.BallController
+        local character, _, humanoid = localParts()
+        local now = os.clock()
+        if not alive or not config.PerfectShot or not playing() or character ~= flight.character
+            or not humanoid or humanoid.Health <= 0 or GetCurrentBall() ~= ball or not ball.Parent
+            or not flight.hoop.Parent or targetHoop() ~= flight.hoop or not controller then clearPerfect(); return end
+        if not flight.confirmed then
+            if now - flight.started > 2 then clearPerfect() end
+            return
+        end
+        local ok, owner = pcall(controller.GetPlayerPossessingBall, controller)
+        if not ok or (owner and owner ~= LocalPlayer) then clearPerfect(); return end
+        if owner == LocalPlayer then
+            if flight.launched or now - flight.started > 2 then clearPerfect() end
+            return
+        end
+        local success, controlled = pcall(controller.LocalPlayerIsBallNetworkOwner, controller)
+        if not success or not controlled or ball.Anchored then clearPerfect(); return end
+        if not flight.launched then
+            local velocity, duration = shotVelocity(ball.Position, flight.hoop.Position, Workspace.Gravity)
+            if not velocity then clearPerfect(); return end
+            flight.origin, flight.velocity, flight.duration = ball.Position, velocity, duration
+            flight.gravity, flight.launched = Workspace.Gravity, now
+            perfectShotLock = {ball = ball, expires = now + duration + 0.15}
+            ball.AssemblyLinearVelocity = velocity
+            return
+        end
+        local elapsed = now - flight.launched
+        if elapsed > flight.duration + 0.1 or Workspace.Gravity ~= flight.gravity then clearPerfect(); return end
+        -- Follow the calculated descending arc; compensate for local drag and
+        -- small integration errors instead of multiplying speed every 0.5s.
+        local gravity = Vector3.new(0, -flight.gravity, 0)
+        local expected = flight.origin + flight.velocity * elapsed + gravity * (elapsed * elapsed * 0.5)
+        local error = expected - ball.Position
+        if error.Magnitude > 25 then clearPerfect(); return end
+        local correction = error * 8
+        if correction.Magnitude > 35 then correction = correction.Unit * 35 end
+        ball.AssemblyLinearVelocity = flight.velocity + gravity * elapsed + correction
+            - gravity * (math.min(dt or 1 / 60, 0.05) * 0.5)
+    end
     local function surface(part)
         if not part or not (part:IsA("BasePart") or part:IsA("Terrain")) then return false end
         if part:IsA("BasePart") and not part.CanCollide then return false end
@@ -1445,6 +1518,7 @@ end
         local patch = throwPatch
         throwPatch = nil
         clearReturn()
+        clearPerfect()
         if patch and patch.received then patch.received:Disconnect() end
         if patch and rawget(patch.object, "Fire") == patch.wrapper then
             rawset(patch.object, "Fire", patch.rawOriginal)
@@ -1454,7 +1528,7 @@ end
         local ability = controllers.AbilityController
         local service = ability and ability.BallService
         local signal = service and service.Throw
-        if not (config.SilentAimShot or config.BounceReturn) or not mutable(signal) then removeSilentAim() return end
+        if not (config.SilentAimShot or config.BounceReturn or config.PerfectShot) or not mutable(signal) then removeSilentAim() return end
         if throwPatch and throwPatch.object == signal then return end
         removeSilentAim()
         local original = signal.Fire
@@ -1465,17 +1539,21 @@ end
                 if throwPatch == patch and returnFlight and typeof(destination) == "Vector3" then
                     returnFlight.confirmed = true
                 end
+                if throwPatch == patch and perfectFlight and typeof(destination) == "Vector3" then
+                    perfectFlight.confirmed = true
+                end
             end)
         end
         patch.wrapper = function(self, ...)
             local args = table.pack(...)
             local state = states()
-            if alive and config.BounceReturn and self == signal and typeof(args[1]) == "Vector2"
+            if alive and config.BounceReturn and not config.PerfectShot and self == signal and typeof(args[1]) == "Vector2"
                 and args[2] ~= true and not state.Dunking and not state.Ability
                 and (state.Shooting or state.AimAssist) then armReturn() end
-            if alive and config.SilentAimShot and self == signal and typeof(args[1]) == "Vector2"
+            if alive and (config.SilentAimShot or config.PerfectShot) and self == signal and typeof(args[1]) == "Vector2"
                 and args[2] ~= true and not state.Dunking and not state.Ability
                 and (state.Shooting or state.AimAssist) then
+                if config.PerfectShot then armPerfect() end
                 local _, root = localParts()
                 local hoop = targetHoop()
                 if root and hoop then
@@ -1565,6 +1643,7 @@ end
     end
     local function resetRound()
         clearReturn()
+        clearPerfect()
         actionEpoch = actionEpoch + 1
         actionBusy = false
         lastDribble, lastThreatCheck = -math.huge, 0
@@ -1629,11 +1708,12 @@ end
             if now - lastScan >= 2 then
                 lastScan = now
                 if not controllers.BallController or not controllers.MovementController or not controllers.Network
-                    or ((config.SilentAimShot or config.BounceReturn) and not controllers.AbilityController) then discoverControllers() end
+                    or ((config.SilentAimShot or config.BounceReturn or config.PerfectShot) and not controllers.AbilityController) then discoverControllers() end
                 updateSilentAim()
             end
             updateInfinite()
             updateReturn(dt)
+            updatePerfect(dt)
             if now - lastThreatCheck < 0.04 then return end
             lastThreatCheck = now
             local character, root, humanoid = localParts()
@@ -1659,6 +1739,7 @@ end
         config[key] = value == true and not ScriptUnloaded
         if key == "AutoDunk" then setAutoDunk(config.AutoDunk) end
         if not config.BounceReturn then clearReturn() end
+        if not config.PerfectShot then clearPerfect() else clearReturn() end
         if anyEnabled() then
             start()
             updateInfinite()
@@ -1673,6 +1754,7 @@ end
         {"InfiniteDribble", "Infinite Dribble", "Unlimited local Dribble uses with no series limit or cooldown"},
         {"AutoDribble", "Auto Dribble", "Reacts only to an opposing player's Steal animation directed at you"},
         {"SilentAimShot", "Silent Aim", "Aims ordinary shot releases at your scoring hoop without moving the camera"},
+        {"PerfectShot", "Perfect Shot", "Aims and guides your released shot along a distance-calculated arc"},
         {"AutoDunk", "Auto Dunk", "Activates the game Dunk button in range; no keyboard input or module calls"},
         {"BounceReturn", "Bounce Return", "Returns your shot to your hands after its first floor, wall or backboard bounce"},
     }
