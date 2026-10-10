@@ -1375,6 +1375,9 @@ end
         if not alive or not config.PerfectShot or not playing() or character ~= flight.character
             or not humanoid or humanoid.Health <= 0 or GetCurrentBall() ~= ball or not ball.Parent
             or not flight.hoop.Parent or targetHoop() ~= flight.hoop or not controller then clearPerfect(); return end
+        -- Release acknowledgement, possession and physics ownership arrive separately.
+        -- Give every pending shot the same bounded window to finish that handoff.
+        if not flight.launched and now - flight.started > 2 then clearPerfect(); return end
         if not flight.confirmed then
             if now - flight.started > 2 then clearPerfect() end
             return
@@ -1386,7 +1389,10 @@ end
             return
         end
         local success, controlled = pcall(controller.LocalPlayerIsBallNetworkOwner, controller)
-        if not success or not controlled or ball.Anchored then clearPerfect(); return end
+        if not success or not controlled or ball.Anchored then
+            if flight.launched then clearPerfect() end
+            return
+        end
         if not flight.launched then
             local velocity, duration = shotVelocity(ball.Position, flight.hoop.Position, Workspace.Gravity)
             if not velocity then clearPerfect(); return end
