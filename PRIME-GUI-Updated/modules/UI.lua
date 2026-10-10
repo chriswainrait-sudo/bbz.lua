@@ -1447,8 +1447,11 @@ function NexusUI:CreateWindow(options)
         end
 
         function tabObject:AddToggle(id, data)
+            local rowHeight = IS_MOBILE and 30 or 26
+            local showDescription = data and data.ShowDescription == true
             local toggleFrame = Instance.new("Frame")
-            toggleFrame.Size = UDim2.new(1, 0, 0, IS_MOBILE and 30 or 26)
+            toggleFrame.Size = UDim2.new(1, 0, 0, rowHeight)
+            if showDescription then toggleFrame.AutomaticSize = Enum.AutomaticSize.Y end
             toggleFrame.BackgroundTransparency = 1
             toggleFrame.Active = true
             toggleFrame.LayoutOrder = #controls + 1
@@ -1467,7 +1470,7 @@ function NexusUI:CreateWindow(options)
             switch.Name = "Switch"
             switch.AnchorPoint = Vector2.new(1, 0.5)
             switch.Size = UDim2.fromOffset(SWITCH_W, SWITCH_H)
-            switch.Position = UDim2.new(1, -2, 0.5, 0)
+            switch.Position = showDescription and UDim2.new(1, -2, 0, rowHeight / 2) or UDim2.new(1, -2, 0.5, 0)
             switch.BackgroundColor3 = SWITCH_OFF
             switch.BorderSizePixel = 0
             switch.Parent = toggleFrame
@@ -1511,7 +1514,8 @@ function NexusUI:CreateWindow(options)
             knobCorner.Parent = knob
 
             local label = Instance.new("TextLabel")
-            label.Size = UDim2.new(1, -(SWITCH_W + 10), 1, 0)
+            label.Size = showDescription and UDim2.new(1, -(SWITCH_W + 10), 0, rowHeight)
+                or UDim2.new(1, -(SWITCH_W + 10), 1, 0)
             label.Position = UDim2.new(0, 0, 0, 0)
             label.BackgroundTransparency = 1
             label.Text = data and data.Title or id
@@ -1521,6 +1525,25 @@ function NexusUI:CreateWindow(options)
             label.TextXAlignment = Enum.TextXAlignment.Left
             label.TextYAlignment = Enum.TextYAlignment.Center
             label.Parent = toggleFrame
+
+            local descriptionLabel
+            if showDescription then
+                descriptionLabel = Instance.new("TextLabel")
+                descriptionLabel.Name = "Description"
+                descriptionLabel.Size = UDim2.new(1, -4, 0, 0)
+                descriptionLabel.Position = UDim2.fromOffset(0, rowHeight + 2)
+                descriptionLabel.AutomaticSize = Enum.AutomaticSize.Y
+                descriptionLabel.BackgroundTransparency = 1
+                descriptionLabel.Text = tostring(data.Description or "")
+                descriptionLabel.TextWrapped = true
+                descriptionLabel.TextScaled = false
+                descriptionLabel.TextSize = 12
+                descriptionLabel.FontFace = Font.new(FONT_BODY, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+                descriptionLabel.TextXAlignment = Enum.TextXAlignment.Left
+                descriptionLabel.TextYAlignment = Enum.TextYAlignment.Top
+                NexusUI:BindColor(descriptionLabel, "TextColor3", function() return COLOR_TEXT_DIM end)
+                descriptionLabel.Parent = toggleFrame
+            end
 
             local lockedBanner = Instance.new("TextLabel")
             lockedBanner.Name = "LockedBanner"
@@ -1610,6 +1633,7 @@ function NexusUI:CreateWindow(options)
 
             function toggleOption:SetDescription(text)
                 local description = tostring(text or "")
+                if descriptionLabel then descriptionLabel.Text = description end
                 if description ~= "" then
                     label.Text = self.Title or (data and data.Title or id)
                 end
