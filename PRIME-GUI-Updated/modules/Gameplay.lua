@@ -76,6 +76,382 @@ end)
 
 MainSection = Tabs.Main:AddSection("Main", "Left")
 
+-- Steal Support: remote dribble counters are NOT replicated in this Place.
+-- All displayed cooldowns are estimates from ordinary character animations.
+do
+    local enabled = false
+    local connections, records, roundConnections = {}, {}, {}
+    local lastOwner
+    local animationInfo, specialAnimations = {}, {}
+    local stateClient
+    -- Verified in this Place's Shared.Tables.Zones. Other PRIME features may
+    -- modify the loaded Zones table locally; those edits do not affect opponents.
+    local zoneDribbles = {StreetDribbler = 4, Perfectionist = 4, EmperorVision = 4,
+        GoldVision = 4, Senses = 4, Darkness = 4, ["777"] = 5,
+        Ordinary = 4, Shock = 4, Oldschool = 5, Samurai = 2}
+    local heartbeat, dependencyTask
+    local lastUpdate = 0
+    local GREEN = Color3.fromRGB(90, 235, 135)
+    local RED = Color3.fromRGB(255, 105, 105)
+    local AMBER = Color3.fromRGB(255, 205, 95)
+    local DIM = Color3.fromRGB(205, 210, 220)
+
+    -- BEGIN STEAL SUPPORT STATE (pure functions; tested outside Studio)
+    local function newDribbleState(now)
+        return {used = 0, known = false, readyAt = now + 4,
+            db = now, protectedUntil = 0, specialUntil = 0, ambiguousUntil = 0}
+    end
+
+    local function advanceDribbleState(state, now)
+        if now >= state.readyAt and now >= state.specialUntil then state.known = true end
+        if now > state.db + 3.5 then state.used = 0 end
+    end
+
+    local function observeDribble(state, now, maxLow, maxHigh, comboCount)
+        advanceDribbleState(state, now)
+        state.used = math.max(state.used + 1, comboCount or 1)
+        state.protectedUntil = math.max(state.protectedUntil, now + 0.72)
+        state.readyAt = now + 4
+        if state.used >= maxHigh then
+            state.used = 0
+            state.db = now + 4
+            state.known = true
+            state.ambiguousUntil = 0
+        else
+            state.db = now + 0.5
+            state.ambiguousUntil = maxLow ~= maxHigh and state.used >= maxLow and now + 4 or 0
+        end
+    end
+
+    local function dribbleStatus(state, now, owner, opponent, protected, low, high)
+        advanceDribbleState(state, now)
+        local limit = low == high and tostring(high) or (tostring(low) .. "-" .. tostring(high))
+        if state.specialUntil > now then return "SPECIAL / CD UNKNOWN", "amber" end
+        if owner and (protected or state.protectedUntil > now) then return "PROTECTED / DRIBBLING", "red" end
+        if state.ambiguousUntil > now then return "DRIBBLE CD ? (ZONE)", "amber" end
+        if not state.known then return "DRIBBLE ? / " .. limit, "amber" end
+        local remaining = state.db - now
+        if remaining > 0 then
+            local prefix = owner and opponent and "STEAL WINDOW" or "DRIBBLE CD"
+            return string.format("%s ~%.1fs", prefix, remaining), owner and opponent and "green" or "amber"
+        end
+        return string.format("DRIBBLE READY ~%d / %s", math.max(0, high - state.used), limit), "dim"
+    end
+    -- END STEAL SUPPORT STATE
+
+    local function connect(list, signal, callback)
+        local connection = signal:Connect(callback)
+        table.insert(list, connection)
+        return connection
+    end
+
+    local function disconnectAll(list)
+        for _, connection in ipairs(list) do connection:Disconnect() end
+        table.clear(list)
+    end
+
+    local function animationId(value)
+        return tostring(value or ""):match("%d+")
+    end
+
+    local function rebuildAnimationMap()
+        table.clear(animationInfo)
+        table.clear(specialAnimations)
+        local assets = ReplicatedStorage:FindFirstChild("Assets")
+        local animations = assets and assets:FindFirstChild("Animations")
+        if animations then
+            for _, folder in ipairs(animations:GetChildren()) do
+                if folder.Name == "Dribbles" or folder.Name:find("Combo", 1, true) then
+                    for _, animation in ipairs(folder:GetChildren()) do
+                        if animation:IsA("Animation") then
+                            local id = animationId(animation.AnimationId)
+                            if id then
+                                animationInfo[id] = folder.Name == "Dribbles" and 1 or math.max(1, #animation.Name - 1)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        local styles = assets and assets:FindFirstChild("StyleAnimations")
+        if styles then
+            for _, animation in ipairs(styles:GetDescendants()) do
+                if animation:IsA("Animation") and not animation.Name:find("Ball", 1, true) then
+                    local id = animationId(animation.AnimationId)
+                    if id then specialAnimations[id] = true end
+                end
+            end
+        end
+    end
+
+    local function callState(method)
+        if not stateClient or type(stateClient[method]) ~= "function" then return nil end
+        local ok, value = pcall(stateClient[method], stateClient)
+        if ok then return value end
+    end
+
+    local function valueOf(player, character, name)
+        for _, object in ipairs({character, player}) do
+            local value = object:GetAttribute(name)
+            if value ~= nil then return value end
+            local child = object:FindFirstChild(name)
+            if child and child:IsA("ValueBase") then return child.Value end
+        end
+    end
+
+    local function maxDribbles(player, character, owner)
+        local zone = player:FindFirstChild("Zone")
+        local zoneName = zone and zone:IsA("StringValue") and zone.Value
+        if not zoneName then return 2, 5 end
+        local max = zoneName and zoneDribbles and zoneDribbles[zoneName] or 3
+        local active = valueOf(player, character, "InZone")
+        if active == nil and owner then active = callState("ballPlayerZoneIsActive") end
+        if active == false then return 3, 3 end
+        if zoneName == "777" then
+            local rng = valueOf(player, character, "ZoneRNG")
+            if rng ~= nil then max = rng == 3 and max or 3
+            else return 3, math.max(3, max) end
+        end
+        if active == true then return max, max end
+        return math.min(3, max), math.max(3, max)
+    end
+
+    local function clearCharacter(record)
+        disconnectAll(record.characterConnections)
+        if record.gui then record.gui:Destroy() end
+        record.gui, record.label, record.character, record.animator = nil, nil, nil, nil
+        record.seen = setmetatable({}, {__mode = "k"})
+        record.state = newDribbleState(os.clock())
+    end
+
+    local function makeMarker(record, adornee)
+        local gui = Instance.new("BillboardGui")
+        gui.Name = "PRIME_StealSupport"
+        gui.Adornee = adornee
+        gui.Size = UDim2.fromOffset(230, 46)
+        gui.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
+        gui.AlwaysOnTop = true
+        gui.MaxDistance = 600
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.fromScale(1, 1)
+        label.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
+        label.BackgroundTransparency = 0.2
+        label.BorderSizePixel = 0
+        label.Font = Enum.Font.GothamBold
+        label:SetAttribute("KeepFont", true)
+        label.TextSize = 13
+        label.TextColor3 = AMBER
+        label.TextStrokeTransparency = 0.6
+        label.Text = "DRIBBLE ?"
+        label.Parent = gui
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 6)
+        corner.Parent = label
+        gui.Parent = GuiParent
+        record.gui, record.label = gui, label
+    end
+
+    local function observeTrack(record, track, existing)
+        if not enabled or not record.character then return end
+        local position = track.TimePosition
+        local previous = record.seen[track]
+        -- A stopped track can be reused for the next dribble; Play fires again.
+        if existing and previous ~= nil then return end
+        record.seen[track] = position
+        local id = track.Animation and animationId(track.Animation.AnimationId)
+        local combo = id and animationInfo[id]
+        local now = os.clock()
+        if combo then
+            -- Do not count looped movement/ball animations or stale tracks.
+            if track.Looped or (existing and position / math.max(0.01, math.abs(track.Speed)) > 0.72) then return end
+            local character = record.character
+            local owner = callState("getCharacterPossessingBall") == character
+            local low, high = maxDribbles(record.player, character, owner)
+            local eventTime = existing and now - position / math.max(0.01, math.abs(track.Speed)) or now
+            observeDribble(record.state, eventTime, low, high, combo)
+        elseif id and specialAnimations[id] then
+            -- Ability animations can enable automatic dribbles/other protections.
+            record.state.known = false
+            record.state.used = 0
+            record.state.specialUntil = now + 7
+            record.state.readyAt = now + 7
+            record.state.db = now
+            record.state.ambiguousUntil = 0
+        end
+    end
+
+    local function bindAnimator(record, animator)
+        if record.animator == animator then return end
+        if record.animationConnection then record.animationConnection:Disconnect() end
+        record.state = newDribbleState(os.clock())
+        record.animator = animator
+        record.animationConnection = connect(record.characterConnections, animator.AnimationPlayed, function(track)
+            observeTrack(record, track, false)
+        end)
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do observeTrack(record, track, true) end
+    end
+
+    local function bindCharacter(record, character)
+        clearCharacter(record)
+        record.character = character
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+        if animator then bindAnimator(record, animator) end
+        connect(record.characterConnections, character.DescendantAdded, function(child)
+            if child:IsA("Animator") and child.Parent:IsA("Humanoid") then bindAnimator(record, child) end
+        end)
+    end
+
+    local function removePlayer(player)
+        local record = records[player]
+        if not record then return end
+        clearCharacter(record)
+        disconnectAll(record.connections)
+        records[player] = nil
+    end
+
+    local function addPlayer(player)
+        if player == LocalPlayer or records[player] then return end
+        local record = {player = player, connections = {}, characterConnections = {}}
+        records[player] = record
+        clearCharacter(record)
+        connect(record.connections, player.CharacterAdded, function(character) bindCharacter(record, character) end)
+        connect(record.connections, player.CharacterRemoving, function() clearCharacter(record) end)
+        if player.Character then bindCharacter(record, player.Character) end
+    end
+
+    local function resetRound()
+        local now = os.clock()
+        lastOwner = nil
+        rebuildAnimationMap()
+        for _, record in pairs(records) do
+            record.state = newDribbleState(now)
+            record.seen = setmetatable({}, {__mode = "k"})
+            if record.label then record.label.Text = "NEW ROUND | DRIBBLE ?" end
+        end
+    end
+
+    local function bindRoundSignals(values)
+        disconnectAll(roundConnections)
+        resetRound()
+        if not values then return end
+        local state = values:FindFirstChild("State")
+        if state then connect(roundConnections, state:GetPropertyChangedSignal("Value"), resetRound) end
+        for _, name in ipairs({"TipOff", "PositionReset"}) do
+            local value = values:FindFirstChild(name)
+            if value then
+                connect(roundConnections, value:GetPropertyChangedSignal("Value"), function()
+                    if value.Value == true then resetRound() end
+                end)
+            end
+        end
+        local timer = values:FindFirstChild("Timer")
+        if timer then
+            local previous = timer.Value
+            connect(roundConnections, timer:GetPropertyChangedSignal("Value"), function()
+                local current = timer.Value
+                -- Covers a restarted match even if State stays Playing.
+                if current > previous + 5 then resetRound() end
+                previous = current
+            end)
+        end
+    end
+
+    local function stop()
+        enabled = false
+        if heartbeat then heartbeat:Disconnect() heartbeat = nil end
+        if dependencyTask then pcall(task.cancel, dependencyTask) dependencyTask = nil end
+        disconnectAll(connections)
+        disconnectAll(roundConnections)
+        for player in pairs(records) do removePlayer(player) end
+        stateClient = nil
+        lastOwner = nil
+    end
+
+    local function start()
+        stop()
+        enabled = true
+        rebuildAnimationMap()
+        for _, player in ipairs(Players:GetPlayers()) do addPlayer(player) end
+        connect(connections, Players.PlayerAdded, addPlayer)
+        connect(connections, Players.PlayerRemoving, removePlayer)
+        bindRoundSignals(ReplicatedStorage:FindFirstChild("GameValues"))
+        connect(connections, ReplicatedStorage.ChildAdded, function(child)
+            if child.Name == "GameValues" then bindRoundSignals(child) end
+        end)
+        -- Do not block UI initialization while requiring game modules.
+        dependencyTask = task.defer(function()
+            local controllers = ReplicatedStorage:FindFirstChild("Controllers")
+            local ballController = controllers and controllers:FindFirstChild("BallController")
+            local module = ballController and ballController:FindFirstChild("BallStateClient")
+            if module then
+                local ok, result = pcall(require, module)
+                if enabled and ok then stateClient = result end
+            end
+            dependencyTask = nil
+        end)
+        heartbeat = RunService.Heartbeat:Connect(function()
+            if ScriptUnloaded then stop() return end
+            local now = os.clock()
+            if now - lastUpdate < 0.05 then return end
+            lastUpdate = now
+            local owner = callState("getCharacterPossessingBall")
+            if owner ~= lastOwner then
+                -- Passing/losing the ball can coincide with a stun counter reset.
+                -- Discard old chain counts instead of carrying them into a new possession.
+                if lastOwner then
+                    for _, record in pairs(records) do
+                        if record.character == lastOwner or record.character == owner then
+                            record.state = newDribbleState(now)
+                        end
+                    end
+                end
+                lastOwner = owner
+            end
+            local protected = callState("ballIFrameIsActive") == true
+            local ownerPlayer = owner and Players:GetPlayerFromCharacter(owner)
+            if ownerPlayer and ownerPlayer.Team == LocalPlayer.Team then
+                protected = protected or callState("ballTeamIFrameIsActive") == true
+            end
+            local gameValues = ReplicatedStorage:FindFirstChild("GameValues")
+            local gameState = gameValues and gameValues:FindFirstChild("State")
+            local playing = gameState and gameState.Value == "Playing"
+            for player, record in pairs(records) do
+                local character = record.character
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                local adornee = character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
+                local visible = character and character.Parent and humanoid and humanoid.Health > 0 and adornee
+                if visible then
+                    if not record.gui or not record.gui.Parent then makeMarker(record, adornee) end
+                    record.gui.Adornee = adornee
+                    record.gui.Enabled = true
+                    local isOwner = owner == character
+                    local opponent = playing and LocalPlayer.Team and player.Team and player.Team ~= LocalPlayer.Team
+                        and LocalPlayer.Team.Name ~= "Visitor" and player.Team.Name ~= "Visitor"
+                    local low, high = maxDribbles(player, character, isOwner)
+                    local text, color = dribbleStatus(record.state, now, isOwner, opponent, protected, low, high)
+                    if not stateClient or not next(animationInfo) or not record.animator then
+                        text, color = "DRIBBLE DATA UNAVAILABLE", "amber"
+                    elseif not playing then
+                        text, color = "WAITING FOR ROUND", "dim"
+                    end
+                    record.label.Text = (isOwner and "BALL | " or "") .. text
+                    record.label.TextColor3 = ({green = GREEN, red = RED, amber = AMBER, dim = DIM})[color]
+                elseif record.gui then record.gui.Enabled = false end
+            end
+        end)
+    end
+
+    Tabs.Main:AddToggle("StealSupport", {
+        Title = "Steal Support",
+        Description = "Estimated Dribble cooldown above players (~); green = opponent's unprotected CD window",
+        Default = false,
+        Callback = function(value) if value and not ScriptUnloaded then start() else stop() end end,
+    })
+    RegisterUnloadCallback(stop)
+end
+
+
 
 function GetCurrentBall()
     local reference = ReplicatedStorage:FindFirstChild("Basketball")
@@ -508,6 +884,500 @@ RegisterUnloadCallback(function()
     if AutoPassConnection then AutoPassConnection:Disconnect() AutoPassConnection = nil end
     if AutoBlockDunkConnection then AutoBlockDunkConnection:Disconnect() AutoBlockDunkConnection = nil end
 end)
+
+-- Rage function: all five controls share a lifecycle and existing client controllers.
+do
+    local config = {StealDanger = false, InfiniteDribble = false, AutoDribble = false,
+        SilentAimShot = false, AutoDunk = false}
+    local controllers, connections, roundConnections = {}, {}, {}
+    local alive = false
+    local heartbeat, discoveryTask, dangerGui, dangerLabel
+    local infinitePatch, throwPatch
+    local lastScan, lastThreatCheck, lastDribble, lastDunk = 0, 0, -math.huge, -math.huge
+    local actionBusy, actionEpoch = false, 0
+    local stealIds = {}
+    local notified = {}
+    local unpackArgs = table.unpack or unpack
+
+    local function connect(list, signal, callback)
+        local connection = signal:Connect(callback)
+        table.insert(list, connection)
+        return connection
+    end
+    local function disconnectAll(list)
+        for _, connection in ipairs(list) do connection:Disconnect() end
+        table.clear(list)
+    end
+    local function anyEnabled()
+        for _, value in pairs(config) do if value then return true end end
+        return false
+    end
+    local function mutable(object)
+        return type(object) == "table" and not (table.isfrozen and table.isfrozen(object))
+    end
+    local function notifyOnce(key, message)
+        if notified[key] or not alive then return end
+        notified[key] = true
+        NexusUI:Notify({Title = "Rage function", Content = message, Duration = 5})
+    end
+    local function states()
+        local movement = controllers.MovementController
+        return movement and movement.States or {}
+    end
+    local function values()
+        local network = controllers.Network
+        return network and network.CharValues or {}
+    end
+    local function hasBall()
+        local controller = controllers.BallController
+        if controller and type(controller.GetPlayerPossessingBall) == "function" then
+            local ok, owner = pcall(controller.GetPlayerPossessingBall, controller)
+            if ok then return owner == LocalPlayer end
+        end
+        return values().HasBall == true
+    end
+    local function localParts()
+        local character = LocalPlayer.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        return character, root, humanoid
+    end
+    local function playing()
+        local team = LocalPlayer.Team
+        if not team or team.Name == "Visitor" or LocalPlayer.Neutral then return false end
+        local gameValues = ReplicatedStorage:FindFirstChild("GameValues")
+        local state = gameValues and gameValues:FindFirstChild("State")
+        local scoring = gameValues and gameValues:FindFirstChild("Scoring")
+        local tipOff = gameValues and gameValues:FindFirstChild("TipOff")
+        local positionReset = gameValues and gameValues:FindFirstChild("PositionReset")
+        local barrier = Workspace:FindFirstChild("BARRIER")
+        return state and state.Value == "Playing" and not (scoring and scoring.Value)
+            and not (tipOff and tipOff.Value) and not (positionReset and positionReset.Value)
+            and not (barrier and barrier.CanCollide)
+    end
+    local function targetHoop()
+        local team = LocalPlayer.Team
+        local hoops = Workspace:FindFirstChild("Hoops")
+        local side = team and team.Name ~= "Visitor" and hoops and hoops:FindFirstChild(team.Name)
+        local hoop = side and side:FindFirstChild("Hoop")
+        return hoop and hoop:IsA("BasePart") and hoop or nil
+    end
+    local function opponent(player)
+        return player ~= LocalPlayer and LocalPlayer.Team and player.Team
+            and LocalPlayer.Team ~= player.Team and LocalPlayer.Team.Name ~= "Visitor"
+            and player.Team.Name ~= "Visitor" and not LocalPlayer.Neutral and not player.Neutral
+    end
+    local function buildStealIds()
+        table.clear(stealIds)
+        local assets = ReplicatedStorage:FindFirstChild("Assets")
+        local animations = assets and assets:FindFirstChild("Animations")
+        local blocks = animations and animations:FindFirstChild("Blocks")
+        if blocks then
+            for _, animation in ipairs(blocks:GetChildren()) do
+                if animation:IsA("Animation") and (animation.Name == "StealL" or animation.Name == "StealR") then
+                    local id = animation.AnimationId:match("%d+")
+                    if id then stealIds[id] = true end
+                end
+            end
+        end
+        -- Verified ordinary Steal animations in the current Place.
+        stealIds["106268822474526"], stealIds["132607768946898"] = true, true
+    end
+    local function isStealing(humanoid)
+        local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+        if not animator then return false end
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            local animation = track.Animation
+            local id = animation and animation.AnimationId:match("%d+")
+            if id and stealIds[id] and track.IsPlaying and not track.Looped
+                and track.Speed > 0 and track.TimePosition / track.Speed <= 0.55 then
+                return true
+            end
+        end
+        return false
+    end
+    local function lineClear(character, enemy, origin, destination)
+        local delta = destination - origin
+        if delta.Magnitude < 0.01 then return true end
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local ignored = {character, enemy}
+        local ball = GetCurrentBall()
+        if ball then table.insert(ignored, ball) end
+        params.FilterDescendantsInstances = ignored
+        return Workspace:Raycast(origin, delta, params) == nil
+    end
+    local function findThreats(character, root)
+        local danger, stealThreat
+        local bestDanger = math.huge
+        for _, player in ipairs(Players:GetPlayers()) do
+            if opponent(player) then
+                local enemy = player.Character
+                local enemyRoot = enemy and enemy:FindFirstChild("HumanoidRootPart")
+                local humanoid = enemy and enemy:FindFirstChildOfClass("Humanoid")
+                if enemyRoot and humanoid and humanoid.Health > 0 then
+                    local offset = enemyRoot.Position - root.Position
+                    local distance = offset.Magnitude
+                    if distance <= 25 and lineClear(character, enemy, root.Position, enemyRoot.Position) then
+                        local stealing = isStealing(humanoid)
+                        local toward = distance > 0.01 and -offset.Unit or root.CFrame.LookVector
+                        local facing = enemyRoot.CFrame.LookVector:Dot(toward) >= 0.1
+                        local incoming = stealing and facing
+                        local score = distance - (incoming and 30 or 0)
+                        if score < bestDanger then
+                            bestDanger = score
+                            danger = {player = player, distance = distance, incoming = incoming}
+                        end
+                        -- Auto Dribble ONLY reacts to an opposing team's active
+                        -- ordinary Steal animation directed toward the local player.
+                        if incoming and (not stealThreat or distance < stealThreat.distance) then
+                            stealThreat = {player = player, distance = distance}
+                        end
+                    end
+                end
+            end
+        end
+        return danger, stealThreat
+    end
+    local function makeDangerGui()
+        if dangerGui and dangerGui.Parent then return end
+        dangerGui = Instance.new("ScreenGui")
+        dangerGui.Name = "PRIME_StealDanger"
+        dangerGui.ResetOnSpawn = false
+        dangerGui.IgnoreGuiInset = true
+        dangerGui.DisplayOrder = 120
+        dangerLabel = Instance.new("TextLabel")
+        dangerLabel.Name = "Danger"
+        dangerLabel.AnchorPoint = Vector2.new(0.5, 0)
+        dangerLabel.Position = UDim2.new(0.5, 0, 0, 72)
+        dangerLabel.Size = UDim2.fromOffset(310, 46)
+        dangerLabel.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
+        dangerLabel.BackgroundTransparency = 0.18
+        dangerLabel.BorderSizePixel = 0
+        dangerLabel.Font = Enum.Font.GothamBold
+        dangerLabel:SetAttribute("KeepFont", true)
+        dangerLabel.TextSize = 14
+        dangerLabel.Visible = false
+        dangerLabel.Parent = dangerGui
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 7)
+        corner.Parent = dangerLabel
+        dangerGui.Parent = GuiParent
+    end
+    local function removeDangerGui()
+        if dangerGui then dangerGui:Destroy() end
+        dangerGui, dangerLabel = nil, nil
+    end
+    local function updateDanger(threat)
+        if not config.StealDanger then removeDangerGui() return end
+        makeDangerGui()
+        dangerLabel.Visible = threat ~= nil
+        if threat then
+            dangerLabel.Text = string.format("%s\n%s | %.1f studs",
+                threat.incoming and "STEAL INCOMING" or "STEAL DANGER",
+                threat.player.DisplayName, threat.distance)
+            dangerLabel.TextColor3 = threat.incoming and Color3.fromRGB(255, 85, 85) or Color3.fromRGB(255, 205, 90)
+        end
+    end
+    local function removeInfinite()
+        local patch = infinitePatch
+        infinitePatch = nil
+        if not patch then return end
+        if rawget(patch.object, "Dribble") == patch.wrapper then rawset(patch.object, "Dribble", patch.rawOriginal) end
+        for key, applied in pairs(patch.applied) do
+            if rawget(patch.object, key) == applied then rawset(patch.object, key, patch.original[key]) end
+        end
+    end
+    local function resetDribbleCounters(patch)
+        for key, value in pairs({Dribbles = 0, LastDribble = 0, DribbleDB = tick() - 0.1}) do
+            if patch.original[key] == nil then patch.original[key] = rawget(patch.object, key) end
+            rawset(patch.object, key, value)
+            patch.applied[key] = value
+        end
+    end
+    local function updateInfinite()
+        local object = controllers.BallController
+        if not config.InfiniteDribble or not mutable(object) then removeInfinite() return end
+        if not infinitePatch or infinitePatch.object ~= object then
+            removeInfinite()
+            if type(object.Dribble) ~= "function" then return end
+            local original = object.Dribble
+            local patch = {object = object, rawOriginal = rawget(object, "Dribble"), original = {}, applied = {}}
+            patch.wrapper = function(self, ...)
+                if alive and config.InfiniteDribble and self == object and infinitePatch == patch then
+                    resetDribbleCounters(patch)
+                end
+                local result = table.pack(original(self, ...))
+                -- The game increments the counter and sets a new debounce during
+                -- Dribble. Clear both immediately after it returns as well, so
+                -- unlimited consecutive uses do not depend on the next Heartbeat.
+                -- Never reapply an old patch after disabling/rebinding while a
+                -- game method yields. GetMaxDribbles and its checks stay intact.
+                if alive and config.InfiniteDribble and self == object and infinitePatch == patch then
+                    resetDribbleCounters(patch)
+                end
+                return unpackArgs(result, 1, result.n)
+            end
+            rawset(object, "Dribble", patch.wrapper)
+            infinitePatch = patch
+        end
+        if hasBall() then resetDribbleCounters(infinitePatch) end
+    end
+    local function removeSilentAim()
+        local patch = throwPatch
+        throwPatch = nil
+        if patch and rawget(patch.object, "Fire") == patch.wrapper then
+            rawset(patch.object, "Fire", patch.rawOriginal)
+        end
+    end
+    local function updateSilentAim()
+        local ability = controllers.AbilityController
+        local service = ability and ability.BallService
+        local signal = service and service.Throw
+        if not config.SilentAimShot or not mutable(signal) then removeSilentAim() return end
+        if throwPatch and throwPatch.object == signal then return end
+        removeSilentAim()
+        local original = signal.Fire
+        if type(original) ~= "function" then return end
+        local patch = {object = signal, rawOriginal = rawget(signal, "Fire")}
+        patch.wrapper = function(self, ...)
+            local args = table.pack(...)
+            local state = states()
+            if alive and config.SilentAimShot and self == signal and typeof(args[1]) == "Vector2"
+                and args[2] ~= true and not state.Dunking and not state.Ability
+                and (state.Shooting or state.AimAssist) then
+                local _, root = localParts()
+                local hoop = targetHoop()
+                if root and hoop then
+                    local delta = hoop.Position - root.Position
+                    local direction = Vector2.new(delta.X, delta.Z)
+                    if direction.Magnitude > 0.01 then args[1] = direction.Unit end
+                end
+            end
+            -- Only the outgoing shot direction changes. Nil arguments, flags,
+            -- middleware, passes, layups and camera state are preserved.
+            return original(self, unpackArgs(args, 1, args.n))
+        end
+        rawset(signal, "Fire", patch.wrapper)
+        throwPatch = patch
+    end
+    local function discoverControllers()
+        if discoveryTask or not alive then return end
+        discoveryTask = task.defer(function()
+            local found = {}
+            if type(getgc) == "function" then
+                local ok, objects = pcall(getgc, true)
+                if ok and type(objects) == "table" then
+                    local visited = 0
+                    for _, object in pairs(objects) do
+                        if not alive then return end
+                        if type(object) == "table" then
+                            local name = rawget(object, "Name")
+                            if name == "BallController" and type(object.Dribble) == "function"
+                                and type(object.Dunk) == "function" and type(object.DribbleDB) == "number" then found[name] = object
+                            elseif name == "MovementController" and type(object.States) == "table" then found[name] = object
+                            elseif name == "Network" and type(object.CharValues) == "table" then found[name] = object
+                            elseif name == "AbilityController" and type(object.BallService) == "table" then found[name] = object end
+                            if type(rawget(object, "DunkDistBuffZones")) == "table"
+                                and type(rawget(object, "ZoneDribbles")) == "table" then found.Zones = object end
+                        end
+                        visited = visited + 1
+                        if visited % 2000 == 0 then task.wait() end
+                    end
+                end
+            else
+                -- GetController reads existing controllers without GetService's
+                -- initialization and remote-renaming side effects in this Place.
+                local packages = ReplicatedStorage:FindFirstChild("Packages")
+                local knitModule = packages and packages:FindFirstChild("Knit")
+                local ok, knit = pcall(function() return knitModule and require(knitModule) end)
+                if ok and type(knit) == "table" and type(knit.GetController) == "function" then
+                    for _, name in ipairs({"BallController", "MovementController", "Network", "AbilityController"}) do
+                        local success, controller = pcall(knit.GetController, name)
+                        if success then found[name] = controller end
+                    end
+                end
+            end
+            if alive then
+                for name, object in pairs(found) do controllers[name] = object end
+                updateInfinite()
+                updateSilentAim()
+                if not controllers.BallController then notifyOnce("controllers", "Waiting for the game's client controllers") end
+            end
+            discoveryTask = nil
+        end)
+    end
+    local function actionAllowed(root, humanoid)
+        local state = states()
+        local character = LocalPlayer.Character
+        local ragdoll = character and character:FindFirstChild("IsRagdoll")
+        return root and humanoid and humanoid.Health > 0 and not (ragdoll and ragdoll.Value)
+            and not state.Shooting and not state.AimAssist and not state.Dunking and not state.Ability
+            and not state.Stunned and not state.PumpFake and not actionBusy
+    end
+    local function canDunk(root)
+        local hoop = targetHoop()
+        if not hoop then return false end
+        local delta = hoop.Position - root.Position
+        local distance = Vector2.new(delta.X, delta.Z).Magnitude
+        local state, data = states(), values()
+        local ability = controllers.AbilityController or {}
+        if ability.InPostForm then return false end
+        if data.InAwakening and ability.ChaosMode then return distance < 50 end
+        local multiplier = 1
+        local style = LocalPlayer:FindFirstChild("Style")
+        if style and style.Value == "Symbiote" and data.InAwakening then multiplier = multiplier + 0.3 end
+        if data.InZone then
+            local zone = LocalPlayer:FindFirstChild("Zone")
+            local buffs = controllers.Zones and controllers.Zones.DunkDistBuffZones
+                or {Darkness = 0.3, HAHA = 0.3, Monster = 0.3, Flight = 0.6}
+            multiplier = multiplier + (zone and buffs[zone.Value] or 0)
+        end
+        if type(data.DunkTick) == "number" and data.DunkTick >= Workspace:GetServerTimeNow() then return true end
+        local range = (state.Running and 36 or 25) * multiplier
+        return distance < range and (distance <= 17 or root.AssemblyLinearVelocity.Magnitude >= 5)
+    end
+    local function runAction(method)
+        local object = controllers.BallController
+        if not object or type(object[method]) ~= "function" then return false end
+        actionBusy = true
+        local epoch = actionEpoch
+        task.defer(function()
+            local selected = method == "Dribble" and config.AutoDribble or method == "Dunk" and config.AutoDunk
+            if not alive or epoch ~= actionEpoch or not selected or not playing() or not hasBall() then
+                if epoch == actionEpoch then actionBusy = false end
+                return
+            end
+            local ok, err = pcall(object[method], object)
+            if epoch == actionEpoch then actionBusy = false end
+            if not ok then notifyOnce(method, method .. " failed: " .. tostring(err)) end
+        end)
+        return true
+    end
+    local function resetRound()
+        actionEpoch = actionEpoch + 1
+        actionBusy = false
+        lastDribble, lastDunk, lastThreatCheck = -math.huge, -math.huge, 0
+        if dangerLabel then dangerLabel.Visible = false end
+        if infinitePatch then
+            infinitePatch.original = {Dribbles = 0, LastDribble = 0, DribbleDB = tick()}
+            table.clear(infinitePatch.applied)
+        end
+        buildStealIds()
+        if alive then discoverControllers() end
+    end
+    local function bindRoundSignals(gameValues)
+        disconnectAll(roundConnections)
+        if not gameValues then return end
+        local state = gameValues:FindFirstChild("State")
+        if state then connect(roundConnections, state:GetPropertyChangedSignal("Value"), resetRound) end
+        for _, name in ipairs({"TipOff", "PositionReset"}) do
+            local value = gameValues:FindFirstChild(name)
+            if value then connect(roundConnections, value:GetPropertyChangedSignal("Value"), function()
+                if value.Value then resetRound() end
+            end) end
+        end
+        local timer = gameValues:FindFirstChild("Timer")
+        if timer then
+            local previous = timer.Value
+            connect(roundConnections, timer:GetPropertyChangedSignal("Value"), function()
+                if timer.Value > previous + 5 then resetRound() end
+                previous = timer.Value
+            end)
+        end
+    end
+    local function stop()
+        alive = false
+        actionEpoch = actionEpoch + 1
+        actionBusy = false
+        if heartbeat then heartbeat:Disconnect() heartbeat = nil end
+        if discoveryTask then pcall(task.cancel, discoveryTask) discoveryTask = nil end
+        disconnectAll(connections)
+        disconnectAll(roundConnections)
+        removeInfinite()
+        removeSilentAim()
+        removeDangerGui()
+        table.clear(controllers)
+        table.clear(notified)
+    end
+    local function start()
+        if alive then return end
+        alive = true
+        resetRound()
+        bindRoundSignals(ReplicatedStorage:FindFirstChild("GameValues"))
+        connect(connections, ReplicatedStorage.ChildAdded, function(child)
+            if child.Name == "GameValues" then resetRound(); bindRoundSignals(child) end
+        end)
+        connect(connections, LocalPlayer.CharacterAdded, resetRound)
+        connect(connections, LocalPlayer.CharacterRemoving, resetRound)
+        connect(connections, LocalPlayer:GetPropertyChangedSignal("Team"), resetRound)
+        lastScan = os.clock()
+        discoverControllers()
+        heartbeat = RunService.Heartbeat:Connect(function()
+            if ScriptUnloaded then stop() return end
+            local now = os.clock()
+            if now - lastScan >= 2 then
+                lastScan = now
+                if not controllers.BallController or not controllers.MovementController or not controllers.Network
+                    or (config.SilentAimShot and not controllers.AbilityController) then discoverControllers() end
+                updateSilentAim()
+            end
+            updateInfinite()
+            if now - lastThreatCheck < 0.04 then return end
+            lastThreatCheck = now
+            local character, root, humanoid = localParts()
+            if not playing() or not hasBall() or not root or not humanoid or humanoid.Health <= 0 then
+                updateDanger(nil)
+                return
+            end
+            local danger, stealThreat
+            if config.StealDanger or config.AutoDribble then danger, stealThreat = findThreats(character, root) end
+            updateDanger(danger)
+            if not actionAllowed(root, humanoid) then return end
+            -- An incoming enemy Steal gets priority over Auto Dunk.
+            if config.AutoDribble and stealThreat and now - lastDribble >= 0.72
+                and humanoid.FloorMaterial ~= Enum.Material.Air then
+                local ball = controllers.BallController
+                if ball and type(ball.DribbleDB) == "number" and ball.DribbleDB <= tick()
+                    and not (controllers.AbilityController and controllers.AbilityController.InPostForm) then
+                    if runAction("Dribble") then lastDribble = now; return end
+                end
+            end
+            if config.AutoDunk and now - lastDunk >= 0.8 and canDunk(root) then
+                if runAction("Dunk") then lastDunk = now end
+            end
+        end)
+    end
+    local function setFeature(key, value)
+        config[key] = value == true and not ScriptUnloaded
+        if anyEnabled() then
+            start()
+            updateInfinite()
+            updateSilentAim()
+            if not config.StealDanger then removeDangerGui() end
+        else stop() end
+    end
+
+    Tabs.Main:AddSection("Rage function", "Right")
+    local controls = {
+        {"StealDanger", "Steal Danger", "Warns about nearby enemies and incoming Steal animations"},
+        {"InfiniteDribble", "Infinite Dribble", "Unlimited local Dribble uses with no series limit or cooldown"},
+        {"AutoDribble", "Auto Dribble", "Reacts only to an opposing player's Steal animation directed at you"},
+        {"SilentAimShot", "Silent Aim", "Aims ordinary shot releases at your scoring hoop without moving the camera"},
+        {"AutoDunk", "Auto Dunk", "Automatically dunks when holding the ball in dunk range"},
+    }
+    for _, control in ipairs(controls) do
+        local key, title, description = control[1], control[2], control[3]
+        Tabs.Main:AddToggle(key, {Title = title, Description = description, Default = false,
+            Callback = function(value) setFeature(key, value) end})
+    end
+    Tabs.Main:SetActiveSection(MainSection)
+    RegisterUnloadCallback(function()
+        for key in pairs(config) do config[key] = false end
+        stop()
+    end)
+end
+
 
 -- Cosmetic selector (Additional)
 CosmeticAssets = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Cosmetics")
