@@ -150,6 +150,7 @@ RegisterUnloadCallback(function()
     clearBallEsp()
 end)
 
+--[=[ Shot Power Modifier disabled; implementation retained for later use.
 Tabs.Misc:AddToggle("ShotPowerModifier", {
     Title = "Shot Power Modifier",
     Description = "Modify shot power",
@@ -194,6 +195,8 @@ Tabs.Misc:AddSlider("ShotPowerAmount", {
     end
 })
 
+
+]=]
 
 MovementSection = Tabs.Movement:AddSection("Movement")
 
@@ -258,7 +261,8 @@ Tabs.Misc:AddToggle("AntiSlip", {
     end
 })
 
-Tabs.Misc:AddToggle("InfinitePumpFakes", {
+Tabs.Main:SetActiveSection(MainSection)
+Tabs.Main:AddToggle("InfinitePumpFakes", {
     Title = "Infinite Pump Fakes",
     Description = "Unlimited pump fakes",
     Default = false,
