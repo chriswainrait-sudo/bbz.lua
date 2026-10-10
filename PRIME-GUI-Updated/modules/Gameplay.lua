@@ -1104,12 +1104,11 @@ do
 end
 
     local config = {StealDanger = false, InfiniteDribble = false, AutoDribble = false,
-        SilentAimShot = false, AutoDunk = false, BounceReturn = false, PerfectShot = false}
+        SilentAimShot = false, AutoDunk = false, PerfectShot = false}
     local controllers, connections, roundConnections = {}, {}, {}
     local alive = false
     local heartbeat, discoveryTask, dangerGui, dangerLabel
     local infinitePatch, throwPatch
-    local returnFlight
     local perfectFlight
     local lastScan, lastThreatCheck, lastDribble = 0, 0, -math.huge
     local actionBusy, actionEpoch = false, 0
@@ -1341,11 +1340,6 @@ end
         end
         if hasBall() then resetDribbleCounters(infinitePatch) end
     end
-    local function clearReturn()
-        local flight = returnFlight
-        returnFlight = nil
-        if flight and flight.touch then flight.touch:Disconnect() end
-    end
     local function clearPerfect()
         perfectFlight = nil
         perfectShotLock = nil
@@ -1365,7 +1359,6 @@ end
     -- END PERFECT SHOT BALLISTICS
     local function armPerfect()
         clearPerfect()
-        clearReturn()
         local ball = GetCurrentBall()
         local hoop = targetHoop()
         if not ball or not hoop or not playing() or not hasBall() then return end
@@ -1416,106 +1409,9 @@ end
         ball.AssemblyLinearVelocity = flight.velocity + gravity * elapsed + correction
             - gravity * (math.min(dt or 1 / 60, 0.05) * 0.5)
     end
-    local function surface(part)
-        if not part or not (part:IsA("BasePart") or part:IsA("Terrain")) then return false end
-        if part:IsA("BasePart") and not part.CanCollide then return false end
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player.Character and part:IsDescendantOf(player.Character) then return false end
-        end
-        return true
-    end
-    local function armReturn()
-        clearReturn()
-        local ball = GetCurrentBall()
-        if not ball or not hasBall() or not playing() then return end
-        local controller = controllers.BallController
-        if not controller or type(controller.GetPlayerPossessingBall) ~= "function"
-            or type(controller.LocalPlayerIsBallNetworkOwner) ~= "function" then return end
-        local flight = {ball = ball, character = LocalPlayer.Character, started = os.clock(),
-            phase = "waiting", confirmed = false}
-        returnFlight = flight
-        flight.touch = ball.Touched:Connect(function(part)
-            -- A held ball can already touch the floor or character. Only a
-            -- released, confirmed throw can arm its first surface bounce.
-            if returnFlight == flight and flight.phase == "flying" and surface(part)
-                and os.clock() - flight.released > 0.12 then
-                flight.collided = true
-            end
-        end)
-    end
-    local function updateReturn(dt)
-        local flight = returnFlight
-        if not flight then return end
-        local ball = flight.ball
-        local controller = controllers.BallController
-        local character, root, humanoid = localParts()
-        local now = os.clock()
-        if not alive or not config.BounceReturn or not playing() or character ~= flight.character
-            or not root or not humanoid or humanoid.Health <= 0 or GetCurrentBall() ~= ball
-            or not ball.Parent or now - flight.started > 8 then clearReturn() return end
-        if not flight.confirmed then
-            if now - flight.started > 2 then clearReturn() end
-            return
-        end
-        local ok, owner = pcall(controller.GetPlayerPossessingBall, controller)
-        if not ok or (owner and owner ~= LocalPlayer) then clearReturn() return end
-        if owner == LocalPlayer then
-            if flight.phase ~= "waiting" or now - flight.started > 2 then clearReturn() end
-            return
-        end
-        local success, controlled = pcall(controller.LocalPlayerIsBallNetworkOwner, controller)
-        if not success or not controlled or ball.Anchored then clearReturn() return end
-        if flight.phase == "waiting" then
-            flight.phase, flight.released, flight.previous = "flying", now, ball.Position
-            -- Include only solid world surfaces; characters and the ball itself
-            -- never count as a rebound. RespectCanCollide ignores cosmetic VFX.
-            local params = RaycastParams.new()
-            local ignored = {ball}
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player.Character then table.insert(ignored, player.Character) end
-            end
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = ignored
-            params.RespectCanCollide = true
-            flight.params = params
-        end
-        if flight.phase == "flying" then
-            local displacement = ball.Position - flight.previous
-            if not flight.collided and displacement.Magnitude > 0.01 and now - flight.released > 0.12 then
-                -- Sweep the distance actually travelled, never a future segment.
-                -- Touched is the primary signal; this covers missed fast impacts.
-                local hit = Workspace:Raycast(flight.previous, displacement, flight.params)
-                if hit and surface(hit.Instance) then flight.collided = true end
-                local velocity = ball.AssemblyLinearVelocity
-                local previousVelocity = flight.velocity
-                if not flight.collided and previousVelocity and previousVelocity.Magnitude > 8
-                    and previousVelocity:Dot(velocity) < 0 then
-                    local radius = math.max(ball.Size.X, ball.Size.Y, ball.Size.Z) * 0.5
-                    local contact = Workspace:Raycast(ball.Position,
-                        previousVelocity.Unit * (radius + 0.5), flight.params)
-                    if contact and surface(contact.Instance) then flight.collided = true end
-                end
-            end
-            flight.previous, flight.velocity = ball.Position, ball.AssemblyLinearVelocity
-            if not flight.collided then return end
-            flight.phase, flight.returned = "returning", now
-        end
-        if now - flight.returned > 3 then clearReturn() return end
-        -- Return to the moving character's hand/torso. Let the game's ordinary
-        -- pickup establish possession; never fabricate HasBall or teleport it.
-        local hand = character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm")
-        local torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
-        local target = (hand or torso or root).Position + root.AssemblyLinearVelocity * 0.08
-        local delta = target - ball.Position
-        if delta.Magnitude < 0.08 then return end
-        local speed = math.min(85, math.max(12, delta.Magnitude * 7))
-        ball.AssemblyLinearVelocity = delta.Unit * speed
-            + Vector3.new(0, Workspace.Gravity * math.min(dt or 1 / 60, 0.05) * 0.5, 0)
-    end
     local function removeSilentAim()
         local patch = throwPatch
         throwPatch = nil
-        clearReturn()
         clearPerfect()
         if patch and patch.received then patch.received:Disconnect() end
         if patch and rawget(patch.object, "Fire") == patch.wrapper then
@@ -1526,7 +1422,7 @@ end
         local ability = controllers.AbilityController
         local service = ability and ability.BallService
         local signal = service and service.Throw
-        if not (config.SilentAimShot or config.BounceReturn or config.PerfectShot) or not mutable(signal) then removeSilentAim() return end
+        if not (config.SilentAimShot or config.PerfectShot) or not mutable(signal) then removeSilentAim() return end
         if throwPatch and throwPatch.object == signal
             and rawget(signal, "Fire") == throwPatch.wrapper
             and (not throwPatch.received or throwPatch.received.Connected ~= false) then return end
@@ -1536,9 +1432,6 @@ end
         local patch = {object = signal, rawOriginal = rawget(signal, "Fire")}
         if type(signal.Connect) == "function" then
             patch.received = signal:Connect(function(destination)
-                if throwPatch == patch and returnFlight and typeof(destination) == "Vector3" then
-                    returnFlight.confirmed = true
-                end
                 if throwPatch == patch and perfectFlight and typeof(destination) == "Vector3" then
                     perfectFlight.confirmed = true
                 end
@@ -1547,9 +1440,6 @@ end
         patch.wrapper = function(self, ...)
             local args = table.pack(...)
             local state = states()
-            if alive and config.BounceReturn and not config.PerfectShot and self == signal and typeof(args[1]) == "Vector2"
-                and args[2] ~= true and not state.Dunking and not state.Ability
-                and (state.Shooting or state.AimAssist) then armReturn() end
             if alive and (config.SilentAimShot or config.PerfectShot) and self == signal and typeof(args[1]) == "Vector2"
                 and args[2] ~= true and not state.Dunking and not state.Ability
                 and (state.Shooting or state.AimAssist) then
@@ -1711,11 +1601,10 @@ end
             if now - lastScan >= 2 then
                 lastScan = now
                 if not controllers.BallController or not controllers.MovementController or not controllers.Network
-                    or config.SilentAimShot or config.BounceReturn or config.PerfectShot then discoverControllers() end
+                    or config.SilentAimShot or config.PerfectShot then discoverControllers() end
             end
             updateSilentAim()
             updateInfinite()
-            updateReturn(dt)
             updatePerfect(dt)
             if now - lastThreatCheck < 0.04 then return end
             lastThreatCheck = now
@@ -1747,8 +1636,7 @@ end
             if otherToggle then otherToggle:SetValue(false) end
         end
         if key == "AutoDunk" then setAutoDunk(config.AutoDunk) end
-        if not config.BounceReturn then clearReturn() end
-        if not config.PerfectShot then clearPerfect() else clearReturn() end
+        if not config.PerfectShot then clearPerfect() end
         if anyEnabled() then
             start()
             updateInfinite()
@@ -1765,7 +1653,6 @@ end
         {"SilentAimShot", "Silent Aim", "Aims ordinary shot releases at your scoring hoop without moving the camera"},
         {"PerfectShot", "Perfect Shot", "Aims and guides your released shot along a distance-calculated arc"},
         {"AutoDunk", "Auto Dunk", "Activates the game Dunk button in range; no keyboard input or module calls"},
-        {"BounceReturn", "Bounce Return", "Returns your shot to your hands after its first floor, wall or backboard bounce"},
     }
     for _, control in ipairs(controls) do
         local key, title, description = control[1], control[2], control[3]
