@@ -162,8 +162,8 @@ Tabs.Misc:AddToggle("ShotPowerModifier", {
             
         ShotPowerConnection = TrackScriptConnection(RunService.Heartbeat:Connect(function()
                 if not ShotPowerEnabled then return end
-                local ball = GetCurrentBall()
-                if not ball then return end
+                local ball, trajectoryLocked = GetCurrentBall(true)
+                if not ball or trajectoryLocked then return end
                 
                 local currentVel = ball.AssemblyLinearVelocity
                 local currentTime = tick()
