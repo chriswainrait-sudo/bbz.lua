@@ -34,8 +34,11 @@ AntiSlipConnection = nil
 OriginalCameraMaxZoomDistance = LocalPlayer.CameraMaxZoomDistance
 OriginalFieldOfView = workspace.CurrentCamera and workspace.CurrentCamera.FieldOfView or 70
 
-local function activateGuiButton(button)
+local function activateGuiButton(button, signalOnly)
     if not button or not button:IsA("GuiButton") then return false end
+    if signalOnly then
+        return type(firesignal) == "function" and pcall(firesignal, button.MouseButton1Click) or false
+    end
     local activated = false
     if type(getconnections) == "function" then
         for _, connection in ipairs(getconnections(button.MouseButton1Click)) do
@@ -917,15 +920,15 @@ end)
 
 -- Rage function: controls share a lifecycle and existing client controllers.
 do
--- Auto Dunk uses ordinary input and passive notifications only.
-local setAutoDunk, stopAutoDunk, setDunkKey
+-- Auto Dunk activates the game's button and observes incoming notifications.
+local setAutoDunk, stopAutoDunk
 do
-    local enabled, held, input, virtualInput = false, nil, nil, nil
-    local heartbeat, releaseTask
+    local enabled, input, actionBusy = false, nil, false
+    local heartbeat
+    local epoch, warned = 0, false
     local listeners, remoteListeners, roundListeners = {}, {}, {}
     local data = {}
     local lastAttempt, lastPoll = -math.huge, 0
-    local dunkKey = Enum.KeyCode.Space
     local rangeBuffs = {Darkness = 0.3, HAHA = 0.3, Monster = 0.3, Flight = 0.6}
 
     local function connect(list, signal, callback)
@@ -936,13 +939,8 @@ do
         table.clear(list)
     end
     local function release()
-        local key = held
-        held = nil
-        if releaseTask then pcall(task.cancel, releaseTask); releaseTask = nil end
-        if not key then return end
-        if key.backend == "virtual" then
-            pcall(function() virtualInput:SendKeyEvent(false, key.code, false, game) end)
-        else pcall(keyrelease, key.code.Value) end
+        epoch = epoch + 1
+        actionBusy = false
     end
     local function reset()
         release()
@@ -1016,7 +1014,7 @@ do
         local camera = Workspace.CurrentCamera
         if (barrier and barrier.CanCollide) or (ragdoll and ragdoll.Value)
             or (camera and camera.CameraType == Enum.CameraType.Scriptable)
-            or input:GetFocusedTextBox() or input:IsKeyDown(dunkKey)
+            or input:GetFocusedTextBox()
             or humanoid.FloorMaterial == Enum.Material.Air then return false end
         for _, name in ipairs({"Stunned", "Shooting", "AimAssist", "Dunking", "Ability", "PumpFake", "InPostForm"}) do
             if read(character, name) == true then return false end
@@ -1044,21 +1042,32 @@ do
         end
         local dunkTick = read(character, "DunkTick")
         if type(dunkTick) == "number" and dunkTick >= Workspace:GetServerTimeNow() then return true end
-        -- The game's regular input handler makes the final eligibility check.
+        -- The game's button handler makes the final eligibility check.
         local running = read(character, "Running") == true or input:IsKeyDown(Enum.KeyCode.LeftShift) or speed >= 17
         return distance < (running and 36 or 25) * multiplier and (distance <= 17 or speed >= 5)
     end
     local function press()
-        local token = {code = dunkKey, backend = "virtual"}
-        local ok = virtualInput and pcall(function() virtualInput:SendKeyEvent(true, dunkKey, false, game) end)
-        if not ok and type(keypress) == "function" and type(keyrelease) == "function" then
-            token.backend = "executor"
-            ok = pcall(keypress, dunkKey.Value)
-        end
-        if not ok then return false end
-        held = token
-        releaseTask = task.delay(0.08, function()
-            if held == token then releaseTask = nil; release() end
+        local generation = epoch
+        actionBusy = true
+        task.defer(function()
+            if not enabled or ScriptUnloaded or generation ~= epoch or not canAttempt() then
+                if generation == epoch then actionBusy = false end
+                return
+            end
+            local touchGui = PlayerGui:FindFirstChild("TouchGui")
+            local frame = touchGui and touchGui:FindFirstChild("TouchControlFrame")
+            local button = frame and frame:FindFirstChild("JumpButton")
+            -- In this Place, Resets connects Dunk to JumpButton only on touch
+            -- devices. A plain desktop jump button does not provide that action.
+            local usable = input.TouchEnabled and button and button:IsA("GuiButton")
+            local ok = usable and activateGuiButton(button, true)
+            if generation == epoch then actionBusy = false end
+            if not ok and not warned and enabled and generation == epoch then
+                warned = true
+                NexusUI:Notify({Title = "Auto Dunk", Content = usable
+                    and "Button signal activation is unavailable in this executor"
+                    or "The game's Dunk button is available in touch mode", Duration = 5})
+            end
         end)
         return true
     end
@@ -1069,22 +1078,13 @@ do
         disconnect(listeners); disconnect(remoteListeners); disconnect(roundListeners)
         table.clear(data)
     end
-    setDunkKey = function(name)
-        local key = Enum.KeyCode[name]
-        if key and key ~= Enum.KeyCode.Unknown then release(); dunkKey = key end
-    end
     setAutoDunk = function(value)
         stopAutoDunk()
         if not value or ScriptUnloaded then return end
         local ok, result = pcall(function() return game:GetService("UserInputService") end)
         if not ok then return end
         input = result
-        local success, service = pcall(function() return game:GetService("VirtualInputManager") end)
-        virtualInput = success and service or nil
-        if not virtualInput and not (type(keypress) == "function" and type(keyrelease) == "function") then
-            NexusUI:Notify({Title = "Auto Dunk", Content = "Normal key input is unavailable in this executor", Duration = 5})
-            return
-        end
+        warned = false
         enabled = true; reset(); bindRemotes(); bindRound()
         connect(listeners, ReplicatedStorage.ChildAdded, function(child)
             if child.Name == "Remotes" then reset(); bindRemotes() end
@@ -1096,7 +1096,7 @@ do
         heartbeat = RunService.Heartbeat:Connect(function()
             if ScriptUnloaded then stopAutoDunk(); return end
             local now = os.clock()
-            if not enabled or held or now - lastPoll < 0.05 or now - lastAttempt < 0.8 then return end
+            if not enabled or actionBusy or now - lastPoll < 0.05 or now - lastAttempt < 0.8 then return end
             lastPoll = now
             if canAttempt() then lastAttempt = now; press() end
         end)
@@ -1673,7 +1673,7 @@ end
         {"InfiniteDribble", "Infinite Dribble", "Unlimited local Dribble uses with no series limit or cooldown"},
         {"AutoDribble", "Auto Dribble", "Reacts only to an opposing player's Steal animation directed at you"},
         {"SilentAimShot", "Silent Aim", "Aims ordinary shot releases at your scoring hoop without moving the camera"},
-        {"AutoDunk", "Auto Dunk", "Uses normal Dunk input in range; observes possession without game module calls"},
+        {"AutoDunk", "Auto Dunk", "Activates the game Dunk button in range; no keyboard input or module calls"},
         {"BounceReturn", "Bounce Return", "Returns your shot to your hands after its first floor, wall or backboard bounce"},
     }
     for _, control in ipairs(controls) do
@@ -1681,12 +1681,181 @@ end
         Tabs.Main:AddToggle(key, {Title = title, Description = description, Default = false,
             Callback = function(value) setFeature(key, value) end})
     end
-    local dunkKeys = {"Space"}
-    for _, key in ipairs(Enum.KeyCode:GetEnumItems()) do
-        if key.Name ~= "Space" and key.Name ~= "Unknown" then dunkKeys[#dunkKeys + 1] = key.Name end
+-- No Steal Fall: scoped to the local character's ordinary Steal animation.
+do
+    local enabled, heartbeat, character, humanoid, animator
+    local untilTime, armedAt, lastPoll = 0, 0, 0
+    local connections, animationConnections, roundConnections = {}, {}, {}
+    local savedStates, scripts, motors, constraints = {}, {}, {}, {}
+    local stealIds = {["106268822474526"] = true, ["132607768946898"] = true}
+    local function connect(list, signal, fn)
+        local c = signal:Connect(fn); list[#list + 1] = c; return c
     end
-    Tabs.Main:AddDropdown("AutoDunkKey", {Title = "Auto Dunk Key", Values = dunkKeys, Default = "Space",
-        Callback = setDunkKey})
+    local function disconnect(list)
+        for _, c in ipairs(list) do c:Disconnect() end
+        table.clear(list)
+    end
+    local function ragdolled()
+        local flag = character and character:FindFirstChild("IsRagdoll")
+        return flag and flag:IsA("BoolValue") and flag.Value == true
+    end
+    local function restore()
+        untilTime = 0
+        if humanoid and humanoid.Parent then
+            for state, old in pairs(savedStates) do
+                local applied = state == Enum.HumanoidStateType.GettingUp
+                if humanoid:GetStateEnabled(state) == applied then humanoid:SetStateEnabled(state, old) end
+            end
+        end
+        for object, old in pairs(scripts) do
+            if object.Parent and object.Enabled == false then object.Enabled = old end
+        end
+        -- If the game still has ragdoll active, return joint control to it.
+        -- After a completed recovery, leave the ordinary body joints enabled.
+        if ragdolled() then
+            for object, old in pairs(motors) do
+                if object.Parent and object.Enabled == true then object.Enabled = old end
+            end
+            for object, old in pairs(constraints) do
+                if object.Parent and object.Enabled == false then object.Enabled = old end
+            end
+        end
+        table.clear(savedStates); table.clear(scripts); table.clear(motors); table.clear(constraints)
+    end
+    local function protect()
+        if not enabled or not humanoid or humanoid.Health <= 0 or os.clock() >= untilTime then return end
+        for _, state in ipairs({Enum.HumanoidStateType.Ragdoll, Enum.HumanoidStateType.FallingDown,
+            Enum.HumanoidStateType.GettingUp}) do
+            if savedStates[state] == nil then savedStates[state] = humanoid:GetStateEnabled(state) end
+            humanoid:SetStateEnabled(state, state == Enum.HumanoidStateType.GettingUp)
+        end
+        local ragdoll = character:FindFirstChild("RagdollR6")
+        local client = ragdoll and ragdoll:FindFirstChild("RagdollClient")
+        if client and client:IsA("LocalScript") then
+            if scripts[client] == nil then scripts[client] = client.Enabled end
+            client.Enabled = false
+        end
+        if not ragdolled() then return end
+        -- Keep an already observed Steal knockdown suppressed until recovery,
+        -- with a bounded lifetime so unrelated future falls are unaffected.
+        untilTime = math.max(untilTime, math.min(os.clock() + 0.25, armedAt + 8))
+        local bodyJoints = {}
+        for _, object in ipairs(character:GetDescendants()) do
+            if object:IsA("Motor6D") and object.Part0 and object.Part1 then
+                bodyJoints[#bodyJoints + 1] = {object.Part0, object.Part1}
+                if not object.Enabled then
+                    if motors[object] == nil then motors[object] = false end
+                    object.Enabled = true
+                end
+            end
+        end
+        for _, object in ipairs(character:GetDescendants()) do
+            if object:IsA("BallSocketConstraint") or object:IsA("HingeConstraint") then
+                local a, b = object.Attachment0, object.Attachment1
+                if a and b then
+                    for _, pair in ipairs(bodyJoints) do
+                        if (a.Parent == pair[1] and b.Parent == pair[2]) or (a.Parent == pair[2] and b.Parent == pair[1]) then
+                            if object.Enabled then
+                                if constraints[object] == nil then constraints[object] = true end
+                                object.Enabled = false
+                            end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        humanoid.PlatformStand = false
+        local state = humanoid:GetState()
+        if state == Enum.HumanoidStateType.Ragdoll or state == Enum.HumanoidStateType.FallingDown
+            or state == Enum.HumanoidStateType.Physics then
+            humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+        end
+        local root = character:FindFirstChild("HumanoidRootPart")
+        if root and not root.Anchored then
+            root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            local forward = root.CFrame.LookVector
+            local horizontal = Vector3.new(forward.X, 0, forward.Z)
+            if horizontal.Magnitude > 0.01 then root.CFrame = CFrame.lookAt(root.Position, root.Position + horizontal.Unit) end
+        end
+    end
+    local function observe(track, existing)
+        local id = track.Animation and tostring(track.Animation.AnimationId):match("%d+")
+        if not enabled or not stealIds[id] then return end
+        if existing and (not track.IsPlaying or track.TimePosition / math.max(0.01, math.abs(track.Speed)) > 0.72) then return end
+        if not humanoid or humanoid.Health <= 0 then return end
+        armedAt = os.clock()
+        untilTime = armedAt + 2.5
+        protect()
+    end
+    local function bindCharacter()
+        restore(); disconnect(animationConnections)
+        character = LocalPlayer.Character
+        humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+        if animator then
+            connect(animationConnections, animator.AnimationPlayed, function(track) observe(track, false) end)
+            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do observe(track, true) end
+        end
+    end
+    local function bindRound()
+        disconnect(roundConnections)
+        local values = ReplicatedStorage:FindFirstChild("GameValues")
+        if not values then return end
+        for _, name in ipairs({"State", "TipOff", "PositionReset"}) do
+            local value = values:FindFirstChild(name)
+            if value then connect(roundConnections, value:GetPropertyChangedSignal("Value"), function()
+                if name == "State" or value.Value then restore() end
+            end) end
+        end
+        local timer = values:FindFirstChild("Timer")
+        if timer then
+            local previous = timer.Value
+            connect(roundConnections, timer:GetPropertyChangedSignal("Value"), function()
+                if timer.Value > previous + 5 then restore() end
+                previous = timer.Value
+            end)
+        end
+    end
+    local function stop()
+        enabled = false
+        if heartbeat then heartbeat:Disconnect(); heartbeat = nil end
+        restore(); disconnect(connections); disconnect(animationConnections); disconnect(roundConnections)
+        character, humanoid, animator = nil, nil, nil
+    end
+    local function start()
+        stop()
+        if ScriptUnloaded then return end
+        enabled = true
+        bindCharacter(); bindRound()
+        connect(connections, LocalPlayer.CharacterAdded, bindCharacter)
+        connect(connections, LocalPlayer.CharacterRemoving, function()
+            restore(); disconnect(animationConnections); character, humanoid, animator = nil, nil, nil
+        end)
+        connect(connections, LocalPlayer:GetPropertyChangedSignal("Team"), restore)
+        connect(connections, ReplicatedStorage.ChildAdded, function(child)
+            if child.Name == "GameValues" then restore(); bindRound() end
+        end)
+        heartbeat = RunService.Heartbeat:Connect(function()
+            if ScriptUnloaded then stop(); return end
+            local now = os.clock()
+            if now - lastPoll < 0.03 then return end
+            lastPoll = now
+            local current = LocalPlayer.Character
+            local hum = current and current:FindFirstChildOfClass("Humanoid")
+            local anim = hum and hum:FindFirstChildOfClass("Animator")
+            if current ~= character or hum ~= humanoid or anim ~= animator then bindCharacter() end
+            if untilTime > 0 then
+                if now >= untilTime or not humanoid or humanoid.Health <= 0 then restore() else protect() end
+            end
+        end)
+    end
+    Tabs.Main:AddToggle("NoStealFall", {Title = "No Steal Fall",
+        Description = "Locally suppresses ragdoll knockdown briefly after your Steal animation",
+        Default = false, Callback = function(value) if value then start() else stop() end end})
+    RegisterUnloadCallback(stop)
+end
+
     Tabs.Main:SetActiveSection(MainSection)
     RegisterUnloadCallback(function()
         for key in pairs(config) do config[key] = false end
