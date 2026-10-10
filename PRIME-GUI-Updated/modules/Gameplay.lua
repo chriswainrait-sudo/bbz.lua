@@ -1361,10 +1361,12 @@ end
         clearPerfect()
         local ball = GetCurrentBall()
         local hoop = targetHoop()
-        if not ball or not hoop or not playing() or not hasBall() then return end
+        -- Shoot itself checks Network.CharValues.HasBall. Its BallState mirror
+        -- may still be catching up when the native release request is sent.
+        if not hoop or not playing() or not (hasBall() or values().HasBall == true) then return end
         perfectFlight = {ball = ball, hoop = hoop, character = LocalPlayer.Character,
             started = os.clock(), confirmed = false}
-        perfectShotLock = {ball = ball, expires = os.clock() + 2}
+        if ball then perfectShotLock = {ball = ball, expires = os.clock() + 2} end
     end
     local function updatePerfect(dt)
         local flight = perfectFlight
@@ -1373,10 +1375,8 @@ end
         local character, _, humanoid = localParts()
         local now = os.clock()
         if not alive or not config.PerfectShot or not playing() or character ~= flight.character
-            or not humanoid or humanoid.Health <= 0 or GetCurrentBall() ~= ball or not ball.Parent
+            or not humanoid or humanoid.Health <= 0
             or not flight.hoop.Parent or targetHoop() ~= flight.hoop or not controller then clearPerfect(); return end
-        -- Release acknowledgement, possession and physics ownership arrive separately.
-        -- Give every pending shot the same bounded window to finish that handoff.
         if not flight.launched and now - flight.started > 2 then clearPerfect(); return end
         if not flight.confirmed then
             if now - flight.started > 2 then clearPerfect() end
@@ -1387,6 +1387,17 @@ end
         if owner == LocalPlayer then
             if flight.launched or now - flight.started > 2 then clearPerfect() end
             return
+        end
+        local currentBall = GetCurrentBall()
+        if currentBall ~= ball or not ball or not ball.Parent then
+            if flight.launched then clearPerfect(); return end
+            -- The native Throw callback reads Basketball.Value at release, rather
+            -- than retaining the part captured when the outgoing request was sent.
+            if not currentBall or not currentBall.Parent then return end
+            local valid, lastPlayer = pcall(controller.GetLastPlayerToPossessBall, controller)
+            if not valid or lastPlayer ~= LocalPlayer then clearPerfect(); return end
+            ball, flight.ball = currentBall, currentBall
+            perfectShotLock = {ball = ball, expires = flight.started + 2}
         end
         local success, controlled = pcall(controller.LocalPlayerIsBallNetworkOwner, controller)
         if not success or not controlled or ball.Anchored then
@@ -1439,7 +1450,14 @@ end
         if type(signal.Connect) == "function" then
             patch.received = signal:Connect(function(destination)
                 if throwPatch == patch and perfectFlight and typeof(destination) == "Vector3" then
-                    perfectFlight.confirmed = true
+                    local flight = perfectFlight
+                    -- BallController's listener first moves the part out of the
+                    -- animation and sets its native velocity. Run after those listeners.
+                    task.defer(function()
+                        if throwPatch == patch and perfectFlight == flight then
+                            flight.confirmed = true
+                        end
+                    end)
                 end
             end)
         end
