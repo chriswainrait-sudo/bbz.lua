@@ -268,25 +268,23 @@ do
         local gui = Instance.new("BillboardGui")
         gui.Name = "PRIME_StealSupport"
         gui.Adornee = adornee
-        gui.Size = UDim2.fromOffset(230, 46)
+        gui.Size = UDim2.fromOffset(320, 24)
         gui.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
         gui.AlwaysOnTop = true
         gui.MaxDistance = 600
         local label = Instance.new("TextLabel")
         label.Size = UDim2.fromScale(1, 1)
-        label.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
-        label.BackgroundTransparency = 0.2
+        label.BackgroundTransparency = 1
         label.BorderSizePixel = 0
         label.Font = Enum.Font.GothamBold
         label:SetAttribute("KeepFont", true)
         label.TextSize = 13
+        label.TextScaled = false
+        label.TextWrapped = false
         label.TextColor3 = AMBER
         label.TextStrokeTransparency = 0.6
         label.Text = "DRIBBLE ?"
         label.Parent = gui
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = label
         gui.Parent = GuiParent
         record.gui, record.label = gui, label
     end
@@ -1529,7 +1527,9 @@ end
         local service = ability and ability.BallService
         local signal = service and service.Throw
         if not (config.SilentAimShot or config.BounceReturn or config.PerfectShot) or not mutable(signal) then removeSilentAim() return end
-        if throwPatch and throwPatch.object == signal then return end
+        if throwPatch and throwPatch.object == signal
+            and rawget(signal, "Fire") == throwPatch.wrapper
+            and (not throwPatch.received or throwPatch.received.Connected ~= false) then return end
         removeSilentAim()
         local original = signal.Fire
         if type(original) ~= "function" then return end
@@ -1642,8 +1642,11 @@ end
         return true
     end
     local function resetRound()
-        clearReturn()
-        clearPerfect()
+        -- Round transitions can replace controllers, signals or their Fire method.
+        -- Keep the toggles enabled, but rebuild their runtime bindings.
+        if discoveryTask then pcall(task.cancel, discoveryTask) discoveryTask = nil end
+        removeSilentAim()
+        table.clear(controllers)
         actionEpoch = actionEpoch + 1
         actionBusy = false
         lastDribble, lastThreatCheck = -math.huge, 0
@@ -1708,9 +1711,9 @@ end
             if now - lastScan >= 2 then
                 lastScan = now
                 if not controllers.BallController or not controllers.MovementController or not controllers.Network
-                    or ((config.SilentAimShot or config.BounceReturn or config.PerfectShot) and not controllers.AbilityController) then discoverControllers() end
-                updateSilentAim()
+                    or config.SilentAimShot or config.BounceReturn or config.PerfectShot then discoverControllers() end
             end
+            updateSilentAim()
             updateInfinite()
             updateReturn(dt)
             updatePerfect(dt)
@@ -1737,6 +1740,12 @@ end
     end
     local function setFeature(key, value)
         config[key] = value == true and not ScriptUnloaded
+        if config[key] and (key == "SilentAimShot" or key == "PerfectShot") then
+            local otherKey = key == "SilentAimShot" and "PerfectShot" or "SilentAimShot"
+            config[otherKey] = false
+            local otherToggle = NexusUI.Toggles and NexusUI.Toggles[otherKey]
+            if otherToggle then otherToggle:SetValue(false) end
+        end
         if key == "AutoDunk" then setAutoDunk(config.AutoDunk) end
         if not config.BounceReturn then clearReturn() end
         if not config.PerfectShot then clearPerfect() else clearReturn() end
