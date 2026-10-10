@@ -28,7 +28,7 @@ do
         StyleESP = false, ZoneESP = false, BallOwnerESP = false, InventoryHUD = false,
         ExtendedDunk = false, DunkMultiplier = 1.3, QuickRelease = false,
         ExtraPumpFakes = false, PumpCount = 3, ExtendedChain = false, ChainCount = 5,
-        AirAbilities = false, PassBoost = false, PassMultiplier = 1.35,
+        PassBoost = false, PassMultiplier = 1.35,
         AntiSlow = false,
         NoDynamicFOV = false, LowGraphics = false,
     }
@@ -408,28 +408,12 @@ do
     end
     extras = (function()
         local state = {nextAwaken = 0,
-            threats = {}, watched = {}, animKinds = {}, visualSaved = {}, attrSaved = {},
+            threats = {}, watched = {}, animKinds = {}, visualSaved = {},
             flightUntil = 0, flightId = 0, blockedId = -1}
         local api = {}
         local function opponent(other)
             return other and other ~= player and other.Team and other.Team.Name ~= "Visitor"
                 and not other.Neutral and not sameTeam(other)
-        end
-        local function saveAttr(object, key, enabled, value)
-            if not object then return end
-            local saved = state.attrSaved[object]
-            if enabled then
-                if not saved then saved = {}; state.attrSaved[object] = saved end
-                if saved[key] == nil then
-                    local v = object:GetAttribute(key)
-                    saved[key] = v == nil and NIL or v
-                end
-                object:SetAttribute(key, value)
-            elseif saved and saved[key] ~= nil then
-                local v = saved[key]
-                if v == NIL then object:SetAttribute(key, nil) else object:SetAttribute(key, v) end
-                saved[key] = nil
-            end
         end
         local assets = Replicated:FindFirstChild("Assets")
         local animations = assets and assets:FindFirstChild("Animations")
@@ -491,10 +475,6 @@ do
         connect(workspace.DescendantAdded, function(o) if config.LowGraphics then graphicsObject(o) end end)
         connect(Lighting.DescendantAdded, function(o) if config.LowGraphics then graphicsObject(o) end end)
         function api.reset()
-            for o, values in pairs(state.attrSaved) do
-                for k, v in pairs(values) do pcall(function() if v == NIL then o:SetAttribute(k, nil) else o:SetAttribute(k, v) end end) end
-            end
-            table.clear(state.attrSaved)
             restoreGraphics(); state.low = false
             if controllers.MovementController then restoreTable(controllers.MovementController.ExtraBoosts, "CourtsideAntiSlow") end
             state.flightUntil = 0
@@ -510,7 +490,6 @@ do
             local ballController, movement = controllers.BallController, controllers.MovementController
             local network = controllers.Network
             local values = network and network.CharValues
-            saveAttr(Replicated:FindFirstChild("GameTweaks"), "JumpAbilities", config.AirAbilities, true)
             if state.low ~= config.LowGraphics then
                 state.low = config.LowGraphics
                 if state.low then
@@ -659,7 +638,6 @@ do
     csSlider("CS_PumpCount", "PumpCount", Tabs.Zone, "Pump Fakes Count", "Number of pump fakes", 1, 6, 1, 1)
     csToggle("CS_ExtendedChain", "ExtendedChain", Tabs.Zone, "Extended Dribble Chain", "Longer dribble chains inside the zone")
     csSlider("CS_ChainCount", "ChainCount", Tabs.Zone, "Dribbles In Series", "Dribbles per series", 3, 10, 1, 1)
-    csToggle("CS_AirAbilities", "AirAbilities", Tabs.Zone, "Air Abilities", "Allow abilities in the air")
     csToggle("CS_PassBoost", "PassBoost", Tabs.Zone, "Pass Boost", "Faster passes inside the zone")
     csSlider("CS_PassMultiplier", "PassMultiplier", Tabs.Zone, "Pass Speed x", "Pass speed multiplier", 1, 2, 0.05, 2)
 
