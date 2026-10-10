@@ -2435,7 +2435,7 @@ Tabs = {
     Other = Window:AddTab({ Title = "Other"})
 }
 
-Tabs.Settings = Window:AddTab({ Title = "Settings", Badge = "New"})
+Tabs.Settings = Window:AddTab({ Title = "Settings"})
 NexusUI:SetTheme("Noir")
 
 currentCloseKey = Enum.KeyCode.LeftAlt
