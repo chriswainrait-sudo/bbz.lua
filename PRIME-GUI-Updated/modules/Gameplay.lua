@@ -83,13 +83,16 @@ do
     local connections, records, roundConnections = {}, {}, {}
     local lastOwner
     local animationInfo, specialAnimations = {}, {}
-    local stateClient
+    -- Passive copies of notifications already delivered to the normal client.
+    -- Never require game code or request a fresh BallState snapshot.
+    local ballEvents = {}
+    local ballSnapshot = {}
     -- Verified in this Place's Shared.Tables.Zones. Other PRIME features may
     -- modify the loaded Zones table locally; those edits do not affect opponents.
     local zoneDribbles = {StreetDribbler = 4, Perfectionist = 4, EmperorVision = 4,
         GoldVision = 4, Senses = 4, Darkness = 4, ["777"] = 5,
         Ordinary = 4, Shock = 4, Oldschool = 5, Samurai = 2}
-    local heartbeat, dependencyTask
+    local heartbeat
     local lastUpdate = 0
     local GREEN = Color3.fromRGB(90, 235, 135)
     local RED = Color3.fromRGB(255, 105, 105)
@@ -123,7 +126,7 @@ do
         end
     end
 
-    local function dribbleStatus(state, now, owner, opponent, protected, low, high)
+    local function dribbleStatus(state, now, owner, opponent, protected, low, high, protectionKnown)
         advanceDribbleState(state, now)
         local limit = low == high and tostring(high) or (tostring(low) .. "-" .. tostring(high))
         if state.specialUntil > now then return "SPECIAL / CD UNKNOWN", "amber" end
@@ -132,6 +135,9 @@ do
         if not state.known then return "DRIBBLE ? / " .. limit, "amber" end
         local remaining = state.db - now
         if remaining > 0 then
+            if owner and opponent and protectionKnown == false then
+                return string.format("DRIBBLE CD ~%.1fs / PROTECTION ?", remaining), "amber"
+            end
             local prefix = owner and opponent and "STEAL WINDOW" or "DRIBBLE CD"
             return string.format("%s ~%.1fs", prefix, remaining), owner and opponent and "green" or "amber"
         end
@@ -184,10 +190,41 @@ do
         end
     end
 
-    local function callState(method)
-        if not stateClient or type(stateClient[method]) ~= "function" then return nil end
-        local ok, value = pcall(stateClient[method], stateClient)
-        if ok then return value end
+    local function readBallState(method)
+        if method == "getCharacterPossessingBall" then
+            return ballSnapshot.player and ballSnapshot.player.Character
+        elseif method == "ballPlayerZoneIsActive" then return ballSnapshot.inZone
+        elseif method == "ballIFrameIsActive" then
+            return type(ballSnapshot.iframe) == "number" and tick() < ballSnapshot.iframe
+        elseif method == "ballTeamIFrameIsActive" then
+            return type(ballSnapshot.teamIframe) == "number" and tick() < ballSnapshot.teamIframe
+        end
+    end
+
+    local function bindBallEvents()
+        disconnectAll(ballEvents)
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local folder = remotes and remotes:FindFirstChild("BallState")
+        if not folder then return end
+        local handlers = {
+            SetCurrentBallPlayer = function(player)
+                ballSnapshot.player = player
+                ballSnapshot.inZone = nil
+            end,
+            SetBallPlayerInZone = function(active) ballSnapshot.inZone = active end,
+            SetBallIFrame = function(timestamp)
+                if type(timestamp) == "number" then ballSnapshot.iframe = timestamp end
+            end,
+            SetBallTeamIFrame = function(timestamp)
+                if type(timestamp) == "number" then ballSnapshot.teamIframe = timestamp end
+            end,
+        }
+        for name, handler in pairs(handlers) do
+            local remote = folder:FindFirstChild(name)
+            if remote and remote:IsA("RemoteEvent") then
+                connect(ballEvents, remote.OnClientEvent, handler)
+            end
+        end
     end
 
     local function valueOf(player, character, name)
@@ -205,7 +242,7 @@ do
         if not zoneName then return 2, 5 end
         local max = zoneName and zoneDribbles and zoneDribbles[zoneName] or 3
         local active = valueOf(player, character, "InZone")
-        if active == nil and owner then active = callState("ballPlayerZoneIsActive") end
+        if active == nil and owner then active = readBallState("ballPlayerZoneIsActive") end
         if active == false then return 3, 3 end
         if zoneName == "777" then
             local rng = valueOf(player, character, "ZoneRNG")
@@ -265,7 +302,7 @@ do
             -- Do not count looped movement/ball animations or stale tracks.
             if track.Looped or (existing and position / math.max(0.01, math.abs(track.Speed)) > 0.72) then return end
             local character = record.character
-            local owner = callState("getCharacterPossessingBall") == character
+            local owner = readBallState("getCharacterPossessingBall") == character
             local low, high = maxDribbles(record.player, character, owner)
             local eventTime = existing and now - position / math.max(0.01, math.abs(track.Speed)) or now
             observeDribble(record.state, eventTime, low, high, combo)
@@ -323,6 +360,7 @@ do
     local function resetRound()
         local now = os.clock()
         lastOwner = nil
+        table.clear(ballSnapshot)
         rebuildAnimationMap()
         for _, record in pairs(records) do
             record.state = newDribbleState(now)
@@ -360,11 +398,11 @@ do
     local function stop()
         enabled = false
         if heartbeat then heartbeat:Disconnect() heartbeat = nil end
-        if dependencyTask then pcall(task.cancel, dependencyTask) dependencyTask = nil end
+        disconnectAll(ballEvents)
         disconnectAll(connections)
         disconnectAll(roundConnections)
         for player in pairs(records) do removePlayer(player) end
-        stateClient = nil
+        table.clear(ballSnapshot)
         lastOwner = nil
     end
 
@@ -376,26 +414,17 @@ do
         connect(connections, Players.PlayerAdded, addPlayer)
         connect(connections, Players.PlayerRemoving, removePlayer)
         bindRoundSignals(ReplicatedStorage:FindFirstChild("GameValues"))
+        bindBallEvents()
         connect(connections, ReplicatedStorage.ChildAdded, function(child)
             if child.Name == "GameValues" then bindRoundSignals(child) end
-        end)
-        -- Do not block UI initialization while requiring game modules.
-        dependencyTask = task.defer(function()
-            local controllers = ReplicatedStorage:FindFirstChild("Controllers")
-            local ballController = controllers and controllers:FindFirstChild("BallController")
-            local module = ballController and ballController:FindFirstChild("BallStateClient")
-            if module then
-                local ok, result = pcall(require, module)
-                if enabled and ok then stateClient = result end
-            end
-            dependencyTask = nil
+            if child.Name == "Remotes" then bindBallEvents() end
         end)
         heartbeat = RunService.Heartbeat:Connect(function()
             if ScriptUnloaded then stop() return end
             local now = os.clock()
             if now - lastUpdate < 0.05 then return end
             lastUpdate = now
-            local owner = callState("getCharacterPossessingBall")
+            local owner = readBallState("getCharacterPossessingBall")
             if owner ~= lastOwner then
                 -- Passing/losing the ball can coincide with a stun counter reset.
                 -- Discard old chain counts instead of carrying them into a new possession.
@@ -408,10 +437,10 @@ do
                 end
                 lastOwner = owner
             end
-            local protected = callState("ballIFrameIsActive") == true
+            local protected = readBallState("ballIFrameIsActive") == true
             local ownerPlayer = owner and Players:GetPlayerFromCharacter(owner)
             if ownerPlayer and ownerPlayer.Team == LocalPlayer.Team then
-                protected = protected or callState("ballTeamIFrameIsActive") == true
+                protected = protected or readBallState("ballTeamIFrameIsActive") == true
             end
             local gameValues = ReplicatedStorage:FindFirstChild("GameValues")
             local gameState = gameValues and gameValues:FindFirstChild("State")
@@ -429,8 +458,9 @@ do
                     local opponent = playing and LocalPlayer.Team and player.Team and player.Team ~= LocalPlayer.Team
                         and LocalPlayer.Team.Name ~= "Visitor" and player.Team.Name ~= "Visitor"
                     local low, high = maxDribbles(player, character, isOwner)
-                    local text, color = dribbleStatus(record.state, now, isOwner, opponent, protected, low, high)
-                    if not stateClient or not next(animationInfo) or not record.animator then
+                    local protectionKnown = type(ballSnapshot.iframe) == "number"
+                    local text, color = dribbleStatus(record.state, now, isOwner, opponent, protected, low, high, protectionKnown)
+                    if not next(animationInfo) or not record.animator then
                         text, color = "DRIBBLE DATA UNAVAILABLE", "amber"
                     elseif not playing then
                         text, color = "WAITING FOR ROUND", "dim"
@@ -444,7 +474,7 @@ do
 
     Tabs.Main:AddToggle("StealSupport", {
         Title = "Steal Support",
-        Description = "Estimated Dribble cooldown above players (~); green = opponent's unprotected CD window",
+        Description = "Passive animation-based Dribble estimates (~); protection stays unknown until observed",
         Default = false,
         Callback = function(value) if value and not ScriptUnloaded then start() else stop() end end,
     })
@@ -885,15 +915,202 @@ RegisterUnloadCallback(function()
     if AutoBlockDunkConnection then AutoBlockDunkConnection:Disconnect() AutoBlockDunkConnection = nil end
 end)
 
--- Rage function: all five controls share a lifecycle and existing client controllers.
+-- Rage function: controls share a lifecycle and existing client controllers.
 do
+-- Auto Dunk uses ordinary input and passive notifications only.
+local setAutoDunk, stopAutoDunk, setDunkKey
+do
+    local enabled, held, input, virtualInput = false, nil, nil, nil
+    local heartbeat, releaseTask
+    local listeners, remoteListeners, roundListeners = {}, {}, {}
+    local data = {}
+    local lastAttempt, lastPoll = -math.huge, 0
+    local dunkKey = Enum.KeyCode.Space
+    local rangeBuffs = {Darkness = 0.3, HAHA = 0.3, Monster = 0.3, Flight = 0.6}
+
+    local function connect(list, signal, callback)
+        local c = signal:Connect(callback); list[#list + 1] = c; return c
+    end
+    local function disconnect(list)
+        for _, c in ipairs(list) do c:Disconnect() end
+        table.clear(list)
+    end
+    local function release()
+        local key = held
+        held = nil
+        if releaseTask then pcall(task.cancel, releaseTask); releaseTask = nil end
+        if not key then return end
+        if key.backend == "virtual" then
+            pcall(function() virtualInput:SendKeyEvent(false, key.code, false, game) end)
+        else pcall(keyrelease, key.code.Value) end
+    end
+    local function reset()
+        release()
+        table.clear(data)
+        lastAttempt, lastPoll = -math.huge, 0
+    end
+    local function read(character, name)
+        if data[name] ~= nil then return data[name] end
+        local value = character:GetAttribute(name)
+        if value ~= nil then return value end
+        local child = character:FindFirstChild(name)
+        return child and child:IsA("ValueBase") and child.Value or nil
+    end
+    local function bindRemotes()
+        disconnect(remoteListeners)
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        if not remotes then return end
+        for _, name in ipairs({"Network", "UnreliableNetwork"}) do
+            local remote = remotes:FindFirstChild(name)
+            if remote and (remote:IsA("RemoteEvent") or remote:IsA("UnreliableRemoteEvent")) then
+                connect(remoteListeners, remote.OnClientEvent, function(name, value)
+                    -- Keep a private copy; never change the game's Network table.
+                    if type(name) == "string" then data[name] = value end
+                end)
+            end
+        end
+        local ballState = remotes:FindFirstChild("BallState")
+        local owner = ballState and ballState:FindFirstChild("SetCurrentBallPlayer")
+        if owner and owner:IsA("RemoteEvent") then
+            connect(remoteListeners, owner.OnClientEvent, function(player)
+                data.HasBall = player == LocalPlayer
+                if not data.HasBall then release() end
+            end)
+        end
+    end
+    local function bindRound()
+        disconnect(roundListeners)
+        local values = ReplicatedStorage:FindFirstChild("GameValues")
+        if not values then return end
+        for _, name in ipairs({"State", "TipOff", "PositionReset"}) do
+            local value = values:FindFirstChild(name)
+            if value then connect(roundListeners, value:GetPropertyChangedSignal("Value"), function()
+                if name == "State" or value.Value then reset() end
+            end) end
+        end
+        local timer = values:FindFirstChild("Timer")
+        if timer then
+            local previous = timer.Value
+            connect(roundListeners, timer:GetPropertyChangedSignal("Value"), function()
+                if timer.Value > previous + 5 then reset() end
+                previous = timer.Value
+            end)
+        end
+    end
+    local function canAttempt()
+        local character = LocalPlayer.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local team = LocalPlayer.Team
+        if not root or not humanoid or humanoid.Health <= 0 or not team
+            or team.Name == "Visitor" or LocalPlayer.Neutral or read(character, "HasBall") ~= true then return false end
+        local values = ReplicatedStorage:FindFirstChild("GameValues")
+        local state = values and values:FindFirstChild("State")
+        if not state or state.Value ~= "Playing" then return false end
+        for _, name in ipairs({"Scoring", "TipOff", "PositionReset"}) do
+            local value = values:FindFirstChild(name)
+            if value and value.Value then return false end
+        end
+        local barrier = Workspace:FindFirstChild("BARRIER")
+        local ragdoll = character:FindFirstChild("IsRagdoll")
+        local camera = Workspace.CurrentCamera
+        if (barrier and barrier.CanCollide) or (ragdoll and ragdoll.Value)
+            or (camera and camera.CameraType == Enum.CameraType.Scriptable)
+            or input:GetFocusedTextBox() or input:IsKeyDown(dunkKey)
+            or humanoid.FloorMaterial == Enum.Material.Air then return false end
+        for _, name in ipairs({"Stunned", "Shooting", "AimAssist", "Dunking", "Ability", "PumpFake", "InPostForm"}) do
+            if read(character, name) == true then return false end
+        end
+        local animator = humanoid:FindFirstChildOfClass("Animator")
+        if animator then
+            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                if track.IsPlaying and track.Priority.Value >= Enum.AnimationPriority.Action.Value then return false end
+            end
+        end
+        local hoops = Workspace:FindFirstChild("Hoops")
+        local side = hoops and hoops:FindFirstChild(team.Name)
+        local hoop = side and side:FindFirstChild("Hoop")
+        if not hoop or not hoop:IsA("BasePart") then return false end
+        local delta = hoop.Position - root.Position
+        local distance = Vector2.new(delta.X, delta.Z).Magnitude
+        local speed = Vector2.new(root.AssemblyLinearVelocity.X, root.AssemblyLinearVelocity.Z).Magnitude
+        local multiplier = 1
+        local awakened = read(character, "InAwakening") == true
+        local style = LocalPlayer:FindFirstChild("Style")
+        if awakened and style and style.Value == "Symbiote" then multiplier = multiplier + 0.3 end
+        if read(character, "InZone") == true then
+            local zone = LocalPlayer:FindFirstChild("Zone")
+            multiplier = multiplier + (zone and rangeBuffs[zone.Value] or 0)
+        end
+        local dunkTick = read(character, "DunkTick")
+        if type(dunkTick) == "number" and dunkTick >= Workspace:GetServerTimeNow() then return true end
+        -- The game's regular input handler makes the final eligibility check.
+        local running = read(character, "Running") == true or input:IsKeyDown(Enum.KeyCode.LeftShift) or speed >= 17
+        return distance < (running and 36 or 25) * multiplier and (distance <= 17 or speed >= 5)
+    end
+    local function press()
+        local token = {code = dunkKey, backend = "virtual"}
+        local ok = virtualInput and pcall(function() virtualInput:SendKeyEvent(true, dunkKey, false, game) end)
+        if not ok and type(keypress) == "function" and type(keyrelease) == "function" then
+            token.backend = "executor"
+            ok = pcall(keypress, dunkKey.Value)
+        end
+        if not ok then return false end
+        held = token
+        releaseTask = task.delay(0.08, function()
+            if held == token then releaseTask = nil; release() end
+        end)
+        return true
+    end
+    stopAutoDunk = function()
+        enabled = false
+        release()
+        if heartbeat then heartbeat:Disconnect(); heartbeat = nil end
+        disconnect(listeners); disconnect(remoteListeners); disconnect(roundListeners)
+        table.clear(data)
+    end
+    setDunkKey = function(name)
+        local key = Enum.KeyCode[name]
+        if key and key ~= Enum.KeyCode.Unknown then release(); dunkKey = key end
+    end
+    setAutoDunk = function(value)
+        stopAutoDunk()
+        if not value or ScriptUnloaded then return end
+        local ok, result = pcall(function() return game:GetService("UserInputService") end)
+        if not ok then return end
+        input = result
+        local success, service = pcall(function() return game:GetService("VirtualInputManager") end)
+        virtualInput = success and service or nil
+        if not virtualInput and not (type(keypress) == "function" and type(keyrelease) == "function") then
+            NexusUI:Notify({Title = "Auto Dunk", Content = "Normal key input is unavailable in this executor", Duration = 5})
+            return
+        end
+        enabled = true; reset(); bindRemotes(); bindRound()
+        connect(listeners, ReplicatedStorage.ChildAdded, function(child)
+            if child.Name == "Remotes" then reset(); bindRemotes() end
+            if child.Name == "GameValues" then reset(); bindRound() end
+        end)
+        connect(listeners, LocalPlayer.CharacterAdded, reset)
+        connect(listeners, LocalPlayer.CharacterRemoving, reset)
+        connect(listeners, LocalPlayer:GetPropertyChangedSignal("Team"), reset)
+        heartbeat = RunService.Heartbeat:Connect(function()
+            if ScriptUnloaded then stopAutoDunk(); return end
+            local now = os.clock()
+            if not enabled or held or now - lastPoll < 0.05 or now - lastAttempt < 0.8 then return end
+            lastPoll = now
+            if canAttempt() then lastAttempt = now; press() end
+        end)
+    end
+end
+
     local config = {StealDanger = false, InfiniteDribble = false, AutoDribble = false,
-        SilentAimShot = false, AutoDunk = false}
+        SilentAimShot = false, AutoDunk = false, BounceReturn = false}
     local controllers, connections, roundConnections = {}, {}, {}
     local alive = false
     local heartbeat, discoveryTask, dangerGui, dangerLabel
     local infinitePatch, throwPatch
-    local lastScan, lastThreatCheck, lastDribble, lastDunk = 0, 0, -math.huge, -math.huge
+    local returnFlight
+    local lastScan, lastThreatCheck, lastDribble = 0, 0, -math.huge
     local actionBusy, actionEpoch = false, 0
     local stealIds = {}
     local notified = {}
@@ -909,7 +1126,7 @@ do
         table.clear(list)
     end
     local function anyEnabled()
-        for _, value in pairs(config) do if value then return true end end
+        for key, value in pairs(config) do if key ~= "AutoDunk" and value then return true end end
         return false
     end
     local function mutable(object)
@@ -1123,9 +1340,112 @@ do
         end
         if hasBall() then resetDribbleCounters(infinitePatch) end
     end
+    local function clearReturn()
+        local flight = returnFlight
+        returnFlight = nil
+        if flight and flight.touch then flight.touch:Disconnect() end
+    end
+    local function surface(part)
+        if not part or not (part:IsA("BasePart") or part:IsA("Terrain")) then return false end
+        if part:IsA("BasePart") and not part.CanCollide then return false end
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player.Character and part:IsDescendantOf(player.Character) then return false end
+        end
+        return true
+    end
+    local function armReturn()
+        clearReturn()
+        local ball = GetCurrentBall()
+        if not ball or not hasBall() or not playing() then return end
+        local controller = controllers.BallController
+        if not controller or type(controller.GetPlayerPossessingBall) ~= "function"
+            or type(controller.LocalPlayerIsBallNetworkOwner) ~= "function" then return end
+        local flight = {ball = ball, character = LocalPlayer.Character, started = os.clock(),
+            phase = "waiting", confirmed = false}
+        returnFlight = flight
+        flight.touch = ball.Touched:Connect(function(part)
+            -- A held ball can already touch the floor or character. Only a
+            -- released, confirmed throw can arm its first surface bounce.
+            if returnFlight == flight and flight.phase == "flying" and surface(part)
+                and os.clock() - flight.released > 0.12 then
+                flight.collided = true
+            end
+        end)
+    end
+    local function updateReturn(dt)
+        local flight = returnFlight
+        if not flight then return end
+        local ball = flight.ball
+        local controller = controllers.BallController
+        local character, root, humanoid = localParts()
+        local now = os.clock()
+        if not alive or not config.BounceReturn or not playing() or character ~= flight.character
+            or not root or not humanoid or humanoid.Health <= 0 or GetCurrentBall() ~= ball
+            or not ball.Parent or now - flight.started > 8 then clearReturn() return end
+        if not flight.confirmed then
+            if now - flight.started > 2 then clearReturn() end
+            return
+        end
+        local ok, owner = pcall(controller.GetPlayerPossessingBall, controller)
+        if not ok or (owner and owner ~= LocalPlayer) then clearReturn() return end
+        if owner == LocalPlayer then
+            if flight.phase ~= "waiting" or now - flight.started > 2 then clearReturn() end
+            return
+        end
+        local success, controlled = pcall(controller.LocalPlayerIsBallNetworkOwner, controller)
+        if not success or not controlled or ball.Anchored then clearReturn() return end
+        if flight.phase == "waiting" then
+            flight.phase, flight.released, flight.previous = "flying", now, ball.Position
+            -- Include only solid world surfaces; characters and the ball itself
+            -- never count as a rebound. RespectCanCollide ignores cosmetic VFX.
+            local params = RaycastParams.new()
+            local ignored = {ball}
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player.Character then table.insert(ignored, player.Character) end
+            end
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = ignored
+            params.RespectCanCollide = true
+            flight.params = params
+        end
+        if flight.phase == "flying" then
+            local displacement = ball.Position - flight.previous
+            if not flight.collided and displacement.Magnitude > 0.01 and now - flight.released > 0.12 then
+                -- Sweep the distance actually travelled, never a future segment.
+                -- Touched is the primary signal; this covers missed fast impacts.
+                local hit = Workspace:Raycast(flight.previous, displacement, flight.params)
+                if hit and surface(hit.Instance) then flight.collided = true end
+                local velocity = ball.AssemblyLinearVelocity
+                local previousVelocity = flight.velocity
+                if not flight.collided and previousVelocity and previousVelocity.Magnitude > 8
+                    and previousVelocity:Dot(velocity) < 0 then
+                    local radius = math.max(ball.Size.X, ball.Size.Y, ball.Size.Z) * 0.5
+                    local contact = Workspace:Raycast(ball.Position,
+                        previousVelocity.Unit * (radius + 0.5), flight.params)
+                    if contact and surface(contact.Instance) then flight.collided = true end
+                end
+            end
+            flight.previous, flight.velocity = ball.Position, ball.AssemblyLinearVelocity
+            if not flight.collided then return end
+            flight.phase, flight.returned = "returning", now
+        end
+        if now - flight.returned > 3 then clearReturn() return end
+        -- Return to the moving character's hand/torso. Let the game's ordinary
+        -- pickup establish possession; never fabricate HasBall or teleport it.
+        local hand = character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm")
+        local torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+        local target = (hand or torso or root).Position + root.AssemblyLinearVelocity * 0.08
+        local delta = target - ball.Position
+        if delta.Magnitude < 0.08 then return end
+        local speed = math.min(85, math.max(12, delta.Magnitude * 7))
+        ball.AssemblyLinearVelocity = delta.Unit * speed
+            + Vector3.new(0, Workspace.Gravity * math.min(dt or 1 / 60, 0.05) * 0.5, 0)
+    end
     local function removeSilentAim()
         local patch = throwPatch
         throwPatch = nil
+        clearReturn()
+        if patch and patch.received then patch.received:Disconnect() end
         if patch and rawget(patch.object, "Fire") == patch.wrapper then
             rawset(patch.object, "Fire", patch.rawOriginal)
         end
@@ -1134,15 +1454,25 @@ do
         local ability = controllers.AbilityController
         local service = ability and ability.BallService
         local signal = service and service.Throw
-        if not config.SilentAimShot or not mutable(signal) then removeSilentAim() return end
+        if not (config.SilentAimShot or config.BounceReturn) or not mutable(signal) then removeSilentAim() return end
         if throwPatch and throwPatch.object == signal then return end
         removeSilentAim()
         local original = signal.Fire
         if type(original) ~= "function" then return end
         local patch = {object = signal, rawOriginal = rawget(signal, "Fire")}
+        if type(signal.Connect) == "function" then
+            patch.received = signal:Connect(function(destination)
+                if throwPatch == patch and returnFlight and typeof(destination) == "Vector3" then
+                    returnFlight.confirmed = true
+                end
+            end)
+        end
         patch.wrapper = function(self, ...)
             local args = table.pack(...)
             local state = states()
+            if alive and config.BounceReturn and self == signal and typeof(args[1]) == "Vector2"
+                and args[2] ~= true and not state.Dunking and not state.Ability
+                and (state.Shooting or state.AimAssist) then armReturn() end
             if alive and config.SilentAimShot and self == signal and typeof(args[1]) == "Vector2"
                 and args[2] ~= true and not state.Dunking and not state.Ability
                 and (state.Shooting or state.AimAssist) then
@@ -1215,35 +1545,14 @@ do
             and not state.Shooting and not state.AimAssist and not state.Dunking and not state.Ability
             and not state.Stunned and not state.PumpFake and not actionBusy
     end
-    local function canDunk(root)
-        local hoop = targetHoop()
-        if not hoop then return false end
-        local delta = hoop.Position - root.Position
-        local distance = Vector2.new(delta.X, delta.Z).Magnitude
-        local state, data = states(), values()
-        local ability = controllers.AbilityController or {}
-        if ability.InPostForm then return false end
-        if data.InAwakening and ability.ChaosMode then return distance < 50 end
-        local multiplier = 1
-        local style = LocalPlayer:FindFirstChild("Style")
-        if style and style.Value == "Symbiote" and data.InAwakening then multiplier = multiplier + 0.3 end
-        if data.InZone then
-            local zone = LocalPlayer:FindFirstChild("Zone")
-            local buffs = controllers.Zones and controllers.Zones.DunkDistBuffZones
-                or {Darkness = 0.3, HAHA = 0.3, Monster = 0.3, Flight = 0.6}
-            multiplier = multiplier + (zone and buffs[zone.Value] or 0)
-        end
-        if type(data.DunkTick) == "number" and data.DunkTick >= Workspace:GetServerTimeNow() then return true end
-        local range = (state.Running and 36 or 25) * multiplier
-        return distance < range and (distance <= 17 or root.AssemblyLinearVelocity.Magnitude >= 5)
-    end
     local function runAction(method)
+        if method ~= "Dribble" then return false end
         local object = controllers.BallController
         if not object or type(object[method]) ~= "function" then return false end
         actionBusy = true
         local epoch = actionEpoch
         task.defer(function()
-            local selected = method == "Dribble" and config.AutoDribble or method == "Dunk" and config.AutoDunk
+            local selected = config.AutoDribble
             if not alive or epoch ~= actionEpoch or not selected or not playing() or not hasBall() then
                 if epoch == actionEpoch then actionBusy = false end
                 return
@@ -1255,9 +1564,10 @@ do
         return true
     end
     local function resetRound()
+        clearReturn()
         actionEpoch = actionEpoch + 1
         actionBusy = false
-        lastDribble, lastDunk, lastThreatCheck = -math.huge, -math.huge, 0
+        lastDribble, lastThreatCheck = -math.huge, 0
         if dangerLabel then dangerLabel.Visible = false end
         if infinitePatch then
             infinitePatch.original = {Dribbles = 0, LastDribble = 0, DribbleDB = tick()}
@@ -1313,16 +1623,17 @@ do
         connect(connections, LocalPlayer:GetPropertyChangedSignal("Team"), resetRound)
         lastScan = os.clock()
         discoverControllers()
-        heartbeat = RunService.Heartbeat:Connect(function()
+        heartbeat = RunService.Heartbeat:Connect(function(dt)
             if ScriptUnloaded then stop() return end
             local now = os.clock()
             if now - lastScan >= 2 then
                 lastScan = now
                 if not controllers.BallController or not controllers.MovementController or not controllers.Network
-                    or (config.SilentAimShot and not controllers.AbilityController) then discoverControllers() end
+                    or ((config.SilentAimShot or config.BounceReturn) and not controllers.AbilityController) then discoverControllers() end
                 updateSilentAim()
             end
             updateInfinite()
+            updateReturn(dt)
             if now - lastThreatCheck < 0.04 then return end
             lastThreatCheck = now
             local character, root, humanoid = localParts()
@@ -1334,7 +1645,6 @@ do
             if config.StealDanger or config.AutoDribble then danger, stealThreat = findThreats(character, root) end
             updateDanger(danger)
             if not actionAllowed(root, humanoid) then return end
-            -- An incoming enemy Steal gets priority over Auto Dunk.
             if config.AutoDribble and stealThreat and now - lastDribble >= 0.72
                 and humanoid.FloorMaterial ~= Enum.Material.Air then
                 local ball = controllers.BallController
@@ -1343,13 +1653,12 @@ do
                     if runAction("Dribble") then lastDribble = now; return end
                 end
             end
-            if config.AutoDunk and now - lastDunk >= 0.8 and canDunk(root) then
-                if runAction("Dunk") then lastDunk = now end
-            end
         end)
     end
     local function setFeature(key, value)
         config[key] = value == true and not ScriptUnloaded
+        if key == "AutoDunk" then setAutoDunk(config.AutoDunk) end
+        if not config.BounceReturn then clearReturn() end
         if anyEnabled() then
             start()
             updateInfinite()
@@ -1364,20 +1673,27 @@ do
         {"InfiniteDribble", "Infinite Dribble", "Unlimited local Dribble uses with no series limit or cooldown"},
         {"AutoDribble", "Auto Dribble", "Reacts only to an opposing player's Steal animation directed at you"},
         {"SilentAimShot", "Silent Aim", "Aims ordinary shot releases at your scoring hoop without moving the camera"},
-        {"AutoDunk", "Auto Dunk", "Automatically dunks when holding the ball in dunk range"},
+        {"AutoDunk", "Auto Dunk", "Uses normal Dunk input in range; observes possession without game module calls"},
+        {"BounceReturn", "Bounce Return", "Returns your shot to your hands after its first floor, wall or backboard bounce"},
     }
     for _, control in ipairs(controls) do
         local key, title, description = control[1], control[2], control[3]
         Tabs.Main:AddToggle(key, {Title = title, Description = description, Default = false,
             Callback = function(value) setFeature(key, value) end})
     end
+    local dunkKeys = {"Space"}
+    for _, key in ipairs(Enum.KeyCode:GetEnumItems()) do
+        if key.Name ~= "Space" and key.Name ~= "Unknown" then dunkKeys[#dunkKeys + 1] = key.Name end
+    end
+    Tabs.Main:AddDropdown("AutoDunkKey", {Title = "Auto Dunk Key", Values = dunkKeys, Default = "Space",
+        Callback = setDunkKey})
     Tabs.Main:SetActiveSection(MainSection)
     RegisterUnloadCallback(function()
         for key in pairs(config) do config[key] = false end
+        stopAutoDunk()
         stop()
     end)
 end
-
 
 -- Cosmetic selector (Additional)
 CosmeticAssets = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Cosmetics")
